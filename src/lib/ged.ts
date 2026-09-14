@@ -4,7 +4,6 @@ import { log, setStep } from "@/lib/store";
 import {
   extractGedAnalysis,
   formatCpf,
-  hasDigitizationScreen,
   looksLikeEmptyGed,
   onlyDigits,
 } from "@/lib/text";
@@ -65,60 +64,8 @@ export async function loginGed(
   log("info", `GED360 autenticado em ${url}`);
 }
 
-async function openDigitalizacoes(page: Page) {
-  setStep("Abrindo Consultar → Digitalizações...");
-  await clickFirst(page, [
-    "text=Consultar",
-    ".item:has-text('Consultar')",
-    "div.item:has-text('Consultar')",
-  ]);
-  await page.waitForTimeout(700);
-  await clickFirst(page, [
-    "text=Digitalizações",
-    "text=Digitalizacao",
-    "text=Digitalização",
-    ".item:has-text('Digitaliza')",
-  ]);
-  await page.waitForTimeout(1000);
-  await clickFirst(page, [
-    "text=Busca unitária",
-    "text=Busca unitaria",
-    "text=Unitária",
-    "text=Unitaria",
-    "a:has-text('unitária')",
-    "a:has-text('unitaria')",
-  ]);
-  await page.waitForTimeout(800);
-}
-
 async function searchCpf(page: Page, cpf: string) {
   const digits = onlyDigits(cpf);
-  const formatted = formatCpf(digits);
-  const filled = await fillFirst(
-    page,
-    [
-      'input[name="num_cpf"]',
-      "#num_cpf",
-      'input[placeholder*="CPF" i]',
-      'input[id*="cpf" i]',
-      'input[name*="cpf" i]',
-    ],
-    formatted,
-  );
-
-  if (filled) {
-    await clickFirst(page, [
-      'input[name="btnFiltrar"]',
-      'input[value="Filtrar"]',
-      'button:has-text("Filtrar")',
-      'button:has-text("Buscar")',
-      'input[value="Buscar"]',
-      'input[value="Consultar"]',
-    ]);
-    await page.waitForTimeout(2000);
-    return;
-  }
-
   const url =
     `${GED_HOST}digitalizacao-ged/visualizar` +
     `?pagina=0&file_export=&request=1&total=&num_cpf=${digits}` +
@@ -126,8 +73,24 @@ async function searchCpf(page: Page, cpf: string) {
     `&dat_envio_inicial=&dat_envio_final=&dat_conferencia_inicial=&dat_conferencia_final=` +
     `&dat_conferencia_ini_rel=&dat_conferencia_fin_rel=&origem_digitalizacao=` +
     `&undefined_label=&btnFiltrar=Filtrar&vizualizacao=2&tab_digitalizacao=`;
-  await page.goto(url, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1800);
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => undefined);
+    await Promise.race([
+      page.getByText(/resultado da an[aá]lise/i).first().waitFor({ timeout: 7000 }),
+      page.getByText(/nenhum registro|n[aã]o (foi )?encontr|sem resultado/i).first().waitFor({ timeout: 7000 }),
+    ]).catch(() => undefined);
+    await page.waitForTimeout(500);
+
+    const urlCpf = onlyDigits(new URL(page.url()).searchParams.get("num_cpf") ?? "");
+    const typed = onlyDigits(
+      await page.locator('input[name="num_cpf"], #num_cpf').first().inputValue().catch(() => ""),
+    );
+    const onPage = urlCpf || typed;
+    if (!onPage || onPage === digits) return;
+    log("warn", `GED ainda não trocou o CPF da busca (${formatCpf(onPage)}). Tentando de novo...`);
+  }
 }
 
 async function readGedStatusFromDom(page: Page): Promise<string | null> {
@@ -196,23 +159,28 @@ async function readGedStatusFromDom(page: Page): Promise<string | null> {
   }
 }
 
-export async function lookupGedCpf(page: Page, cpf: string, first: boolean): Promise<GedLookup> {
-  if (first) {
-    await openDigitalizacoes(page);
-  }
+export async function lookupGedCpf(page: Page, cpf: string): Promise<GedLookup> {
+  const wanted = onlyDigits(cpf);
   setStep(`Consultando CPF ${formatCpf(cpf)} no GED360...`);
   await searchCpf(page, cpf);
-  await screenshot(page, `ged-${onlyDigits(cpf)}`);
+  await screenshot(page, `ged-${wanted}`);
   const text = await visibleText(page);
+  const urlCpf = onlyDigits(new URL(page.url()).searchParams.get("num_cpf") ?? "");
+  const stale = Boolean(urlCpf) && urlCpf !== wanted;
+  if (stale) {
+    log("warn", `GED ${formatCpf(cpf)}: a tela ainda era de outro CPF. Sem resultado desta busca.`);
+    return { cpf: formatCpf(cpf), hasDigitization: false, result: null };
+  }
+
   const empty = looksLikeEmptyGed(text);
   const fromDom = empty ? null : await readGedStatusFromDom(page);
   const fromText = empty ? null : extractGedAnalysis(text);
   const result = fromDom || fromText;
-  const hasDigitization = Boolean(result) || (!empty && hasDigitizationScreen(text));
+  const hasDigitization = Boolean(result);
   if (!result) {
-    log("info", `GED ${formatCpf(cpf)}: nada encontrado — WhatsApp não será enviado.`);
+    log("info", `GED ${formatCpf(cpf)}: sem Resultado da Análise — permanece o status do CRM.`);
   } else {
-    log("info", `GED ${formatCpf(cpf)}: status na tela = ${result}`);
+    log("info", `GED ${formatCpf(cpf)}: Resultado da Análise = ${result}`);
   }
   return { cpf: formatCpf(cpf), hasDigitization, result };
 }

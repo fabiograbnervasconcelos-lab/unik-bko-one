@@ -35,8 +35,15 @@ export type CrmLead = {
 function uniqueLeads(leads: CrmLead[]) {
   const map = new Map<string, CrmLead>();
   for (const lead of leads) {
-    const key = `${lead.crmStatus}:${onlyDigits(lead.cpf)}`;
-    if (!map.has(key)) map.set(key, lead);
+    const key = onlyDigits(lead.cpf);
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, lead);
+      continue;
+    }
+    if (lead.crmStatus === "aguardando biometria" && prev.crmStatus !== "aguardando biometria") {
+      map.set(key, { ...lead, name: prev.name.length >= lead.name.length ? prev.name : lead.name });
+    }
   }
   return [...map.values()];
 }
@@ -203,7 +210,7 @@ export async function collectCrmLeads(page: Page): Promise<CrmLead[]> {
       const seen = new Set<string>();
       for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
         const batch = (await extractFromTable(page, status)).filter((lead) => {
-          const key = `${status}:${onlyDigits(lead.cpf)}`;
+          const key = onlyDigits(lead.cpf);
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
@@ -217,6 +224,6 @@ export async function collectCrmLeads(page: Page): Promise<CrmLead[]> {
   }
 
   const unique = uniqueLeads(found);
-  log("info", `CRM: ${unique.length} cliente(s) únicos nos dois status.`);
+  log("info", `CRM: ${unique.length} cliente(s) únicos (um CPF cada).`);
   return unique;
 }

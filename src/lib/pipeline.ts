@@ -120,18 +120,18 @@ async function executePipeline(settings: ReturnType<typeof loadSettings>) {
       return getSnapshot();
     }
 
+    log("info", `GED: ${leads.length} CPF(s) para consultar, um de cada vez.`);
     await loginGed(gedPage, settings.gedUser, settings.gedPass, settings.gedDomain);
 
-    let firstGed = true;
     for (const [index, lead] of leads.entries()) {
       if (isStopRequested()) {
         finishScan(results, true);
         return getSnapshot();
       }
       setStep(`GED ${index + 1}/${leads.length}: ${lead.cpf}`);
+      log("info", `GED ${index + 1}/${leads.length}: consultando ${lead.name} · ${lead.cpf}`);
       try {
-        const lookup = await lookupGedCpf(gedPage, lead.cpf, firstGed);
-        firstGed = false;
+        const lookup = await lookupGedCpf(gedPage, lead.cpf);
         const draftMessage = lookup.result ? buildAlertMessage({
           name: lead.name,
           cpf: lead.cpf,

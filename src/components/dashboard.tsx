@@ -74,11 +74,7 @@ function ResultRow({ row }: { row: LeadResult }) {
         </div>
         <div className="flex flex-wrap gap-1">
           <Badge variant="outline">{row.crmStatus}</Badge>
-          {row.gedResult ? (
-            <Badge>{row.gedResult}</Badge>
-          ) : (
-            <Badge variant="secondary">Não encontrado</Badge>
-          )}
+          {row.gedResult ? <Badge>{row.gedResult}</Badge> : null}
           {row.notified ? <Badge variant="outline">WhatsApp enviado</Badge> : null}
           {row.skipped ? <Badge variant="secondary">Não enviar</Badge> : null}
           {row.draftMessage && !row.notified && !row.skipped ? (
@@ -570,7 +566,7 @@ export function Dashboard() {
           <CardHeader>
             <CardTitle>Resultados</CardTitle>
             <CardDescription>
-              Fila do WhatsApp só com CPF que o GED360 mostrou status.
+              Mostra o Resultado da Análise do GED. Se não houver, permanece o status do CRM.
             </CardDescription>
           </CardHeader>
           <CardContent>

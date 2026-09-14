@@ -6,12 +6,10 @@ export function buildAlertMessage(
   return [
     "URGENTE — BKO ONE",
     "",
-    `CRM: ${lead.crmStatus}`,
     `Nome: ${lead.name}`,
     `CPF: ${lead.cpf}`,
-    `GED360: ${lead.gedResult}`,
-    "",
-    "Status atual na tela do GED360. Verificar agora.",
+    `CRM: ${lead.crmStatus}`,
+    `Resultado da Análise: ${lead.gedResult}`,
   ].join("\n");
 }
 
