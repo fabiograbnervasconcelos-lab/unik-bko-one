@@ -44,6 +44,7 @@ export type AppSnapshot = {
   results: LeadResult[];
   screenshots: string[];
   updatedAt: string;
+  stopRequested: boolean;
 };
 
 const MAX_LOGS = 250;
@@ -64,6 +65,7 @@ const snapshot: AppSnapshot = globalForApp.unikBkoSnapshot ?? {
   results: [],
   screenshots: [],
   updatedAt: new Date().toISOString(),
+  stopRequested: false,
 };
 
 globalForApp.unikBkoSnapshot = snapshot;
@@ -118,10 +120,26 @@ export function setScreenshots(files: string[]) {
   touch();
 }
 
+export function requestStop() {
+  snapshot.stopRequested = true;
+  snapshot.step = "Parando envio...";
+  touch();
+}
+
+export function isStopRequested() {
+  return snapshot.stopRequested;
+}
+
+export function clearStop() {
+  snapshot.stopRequested = false;
+  touch();
+}
+
 export function clearRun() {
   snapshot.results = [];
   snapshot.jobError = null;
   snapshot.job = "idle";
+  snapshot.stopRequested = false;
   snapshot.step = "Pronto para verificar CRM e GED360.";
   touch();
 }

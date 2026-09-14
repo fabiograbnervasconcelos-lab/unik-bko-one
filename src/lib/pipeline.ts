@@ -2,7 +2,7 @@ import { launchBrowser, newContext } from "@/lib/browser";
 import { collectCrmLeads, loginCrm, type CrmLead } from "@/lib/crm";
 import { loginGed, lookupGedCpf } from "@/lib/ged";
 import { loadSettings } from "@/lib/settings";
-import { getSnapshot, log, setJob, setResults, setStep, type LeadResult } from "@/lib/store";
+import { getSnapshot, log, setJob, setResults, setStep, isStopRequested, clearStop, type LeadResult } from "@/lib/store";
 import { formatCpf, isValidCpf, onlyDigits } from "@/lib/text";
 import { isWhatsAppReady, sendWhatsAppText } from "@/lib/whatsapp";
 
@@ -48,6 +48,7 @@ export async function runPipeline() {
   }
 
   setJob("running", { error: null, step: "Iniciando verificação..." });
+  clearStop();
   setResults([]);
   log("info", "Verificação iniciada: CRM → GED360 → WhatsApp.");
 
@@ -80,6 +81,11 @@ export async function runPipeline() {
 
     let firstGed = true;
     for (const [index, lead] of leads.entries()) {
+      if (isStopRequested()) {
+        log("warn", "Envio interrompido pelo usuário.");
+        setJob("error", { error: "Envio interrompido.", step: "Parado: nenhum WhatsApp a mais será enviado." });
+        return getSnapshot();
+      }
       setStep(`GED ${index + 1}/${leads.length}: ${lead.cpf}`);
       try {
         const lookup = await lookupGedCpf(gedPage, lead.cpf, firstGed);
@@ -95,6 +101,13 @@ export async function runPipeline() {
           notifyTargets: [],
         };
         if (shouldNotify) {
+          if (isStopRequested()) {
+            log("warn", "Envio interrompido antes do WhatsApp.");
+            results.push(row);
+            setResults([...results]);
+            setJob("error", { error: "Envio interrompido.", step: "Parado: nenhum WhatsApp a mais será enviado." });
+            return getSnapshot();
+          }
           const targets = await sendWhatsAppText(buildAlertMessage(row), ["bko", "gerentes"]);
           row.notified = true;
           row.notifyTargets = targets;

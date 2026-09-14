@@ -421,6 +421,13 @@ export function Dashboard() {
               <Button type="button" disabled={running || !connected} onClick={() => void runNow()}>
                 {running ? "Verificando..." : "Rodar verificação agora"}
               </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => void fetch("/api/stop", { method: "POST" })}
+              >
+                Parar envio
+              </Button>
             </div>
             </form>
           </CardContent>
