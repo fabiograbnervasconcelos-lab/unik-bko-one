@@ -13,8 +13,10 @@ import {
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { WhatsAppPreview } from "@/components/whatsapp-preview";
 import type { AppSnapshot, LeadResult, LogLine, WhatsAppGroup } from "@/lib/store";
 import type { AppSettings } from "@/lib/settings";
+import { isPendingWhatsApp } from "@/lib/message";
 
 type StatusPayload = AppSnapshot & { settings: AppSettings; hasQr?: boolean };
 
@@ -76,6 +78,10 @@ function ResultRow({ row }: { row: LeadResult }) {
             <Badge variant="secondary">Não encontrado</Badge>
           )}
           {row.notified ? <Badge variant="outline">WhatsApp enviado</Badge> : null}
+          {row.skipped ? <Badge variant="secondary">Não enviar</Badge> : null}
+          {row.draftMessage && !row.notified && !row.skipped ? (
+            <Badge variant="outline">Na fila</Badge>
+          ) : null}
         </div>
       </div>
       {row.error ? <p className="mt-2 text-xs text-red-400">{row.error}</p> : null}
@@ -92,10 +98,13 @@ export function Dashboard() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [sending, setSending] = useState(false);
   const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [qrTick, setQrTick] = useState(0);
   const [qrFailed, setQrFailed] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const seenDraftIds = useRef(new Set<string>());
   const formRef = useRef<HTMLFormElement>(null);
 
   function readForm(): AppSettings {
@@ -169,11 +178,49 @@ export function Dashboard() {
       const response = await fetch("/api/run", { method: "POST" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Falha na verificação.");
-      setNotice(data.step || "Verificação concluída.");
+      setNotice(data.step || "Consulta pronta. Confira o preview do WhatsApp.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
       setRunning(false);
+      void refresh();
+    }
+  }
+
+  async function sendSelected() {
+    setSending(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Falha no envio.");
+      setNotice(data.step || "Mensagens enviadas.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSending(false);
+      void refresh();
+    }
+  }
+
+  async function discardSelected() {
+    setNotice(null);
+    try {
+      const response = await fetch("/api/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds), discard: true }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Não foi possível descartar.");
+      setNotice(data.step || "Mensagens retiradas da fila.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
       void refresh();
     }
   }
@@ -198,6 +245,34 @@ export function Dashboard() {
   const groups: WhatsAppGroup[] = snapshot?.groups ?? [];
   const logs = useMemo(() => [...(snapshot?.logs ?? [])].reverse(), [snapshot?.logs]);
   const connected = snapshot?.whatsapp === "connected";
+  const scanning = snapshot?.job === "running" && !sending;
+  const results = snapshot?.results ?? [];
+  const pendingIds = useMemo(
+    () => results.filter(isPendingWhatsApp).map((row) => row.id),
+    [results],
+  );
+
+  useEffect(() => {
+    if (!results.length) {
+      seenDraftIds.current.clear();
+      setSelectedIds(new Set());
+      return;
+    }
+    const pending = new Set(pendingIds);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of pending) {
+        if (!seenDraftIds.current.has(id)) {
+          next.add(id);
+          seenDraftIds.current.add(id);
+        }
+      }
+      for (const id of next) {
+        if (!pending.has(id)) next.delete(id);
+      }
+      return next;
+    });
+  }, [pendingIds, results.length]);
 
   return (
     <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-6 md:px-8">
@@ -213,7 +288,8 @@ export function Dashboard() {
             Lê no CRM quem está em <strong>cancelado/bio expirada</strong> ou{" "}
             <strong>aguardando biometria</strong>, consulta o CPF no GED360 e avisa os
             grupos <strong>BKO One Urgente</strong> e <strong>Gerentes One</strong> com o
-            status que estiver na tela. Se o GED não achar nada, não manda WhatsApp.
+            status da tela. Você vê o preview, valida e só então envia. Se o GED não
+            achar nada, não monta mensagem.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -415,8 +491,8 @@ export function Dashboard() {
               <Button type="button" variant="outline" disabled={saving} onClick={() => void saveSettings()}>
                 {saving ? "Salvando..." : "Salvar acessos"}
               </Button>
-              <Button type="button" disabled={running || !connected} onClick={() => void runNow()}>
-                {running ? "Verificando..." : "Rodar verificação agora"}
+              <Button type="button" disabled={running || sending || !connected} onClick={() => void runNow()}>
+                {running ? "Consultando..." : "Rodar verificação agora"}
               </Button>
               <Button
                 type="button"
@@ -431,19 +507,54 @@ export function Dashboard() {
         </Card>
       </section>
 
+      <section>
+        <Card className="border-[#00a884]/30">
+          <CardHeader>
+            <CardTitle>3. Conferir e enviar no WhatsApp</CardTitle>
+            <CardDescription>
+              Cada balão é o texto que vai para os grupos. Marque o que vale, depois
+              clique em validar e enviar. Sem status no GED, não aparece nada aqui.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <WhatsAppPreview
+              results={results}
+              groups={groups}
+              selectedIds={selectedIds}
+              sending={sending}
+              scanning={Boolean(scanning)}
+              canSend={Boolean(connected && snapshot?.job !== "running")}
+              onToggle={(id) => {
+                setSelectedIds((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(id)) next.delete(id);
+                  else next.add(id);
+                  return next;
+                });
+              }}
+              onToggleAll={(on) => {
+                setSelectedIds(on ? new Set(pendingIds) : new Set());
+              }}
+              onSend={() => void sendSelected()}
+              onDiscard={() => void discardSelected()}
+            />
+          </CardContent>
+        </Card>
+      </section>
+
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Resultados</CardTitle>
             <CardDescription>
-              WhatsApp só se o GED360 mostrar um status. Se não achar nada, não envia.
+              Fila do WhatsApp só com CPF que o GED360 mostrou status.
             </CardDescription>
           </CardHeader>
           <CardContent>
             {snapshot?.results.length ? (
               <div className="space-y-2">
                 {snapshot.results.map((row) => (
-                  <ResultRow key={`${row.cpf}-${row.crmStatus}`} row={row} />
+                  <ResultRow key={row.id || `${row.cpf}-${row.crmStatus}`} row={row} />
                 ))}
               </div>
             ) : (

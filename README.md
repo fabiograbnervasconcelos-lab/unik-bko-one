@@ -8,7 +8,7 @@ O sistema:
 2. Entra no CRM [Proadmin Unik](https://uniktelecom.com.br/proadmin/login.php).
 3. Filtra quem está em **cancelado/bio expirada** e **aguardando biometria**.
 4. Entra no [GED360 BrProntoPDV](https://ged360.niointernet.com.br/brprontopdv/autenticacao/index), aceita cookies e abre **Consultar → Digitalizações → busca unitária CPF**.
-5. Se o GED360 mostrar um status na tela (Resultado da Análise / Status), manda esse texto no WhatsApp para **BKO One Urgente** e **Gerentes One**. Se a busca não achar nada, **não envia** mensagem.
+5. Se o GED360 mostrar um status, o painel monta o texto do WhatsApp e mostra um **preview**. Você valida e clica em enviar para **BKO One Urgente** e **Gerentes One**. Se a busca não achar nada, **não monta mensagem**.
 
 ## Como rodar
 
@@ -25,6 +25,7 @@ Abra `http://127.0.0.1:43147`.
 2. Preencha usuário/senha do CRM e do GED360 (domínio BrPronto por padrão).
 3. Confira se os dois grupos apareceram com o selo certo.
 4. Clique em **Rodar verificação agora**.
+5. Confira o preview do WhatsApp, marque o que vale e clique em **Validar e enviar**.
 
 Credenciais e a sessão do WhatsApp ficam em `data/` (fora do git).
 

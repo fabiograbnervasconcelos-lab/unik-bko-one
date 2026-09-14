@@ -5,7 +5,7 @@ export type WhatsAppState =
   | "connected"
   | "error";
 
-export type JobState = "idle" | "running" | "done" | "error";
+export type JobState = "idle" | "running" | "review" | "done" | "error";
 
 export type LogLevel = "info" | "warn" | "error";
 
@@ -22,12 +22,15 @@ export type WhatsAppGroup = {
 };
 
 export type LeadResult = {
+  id: string;
   name: string;
   cpf: string;
   crmStatus: string;
   hasDigitization: boolean;
   gedResult: string | null;
+  draftMessage: string | null;
   notified: boolean;
+  skipped: boolean;
   notifyTargets: string[];
   error?: string;
 };
@@ -112,6 +115,13 @@ export function setStep(step: string) {
 
 export function setResults(results: LeadResult[]) {
   snapshot.results = results;
+  touch();
+}
+
+export function patchResult(id: string, patch: Partial<LeadResult>) {
+  snapshot.results = snapshot.results.map((row) =>
+    row.id === id ? { ...row, ...patch } : row,
+  );
   touch();
 }
 
