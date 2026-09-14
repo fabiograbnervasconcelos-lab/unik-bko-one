@@ -553,8 +553,8 @@ export function Dashboard() {
           <CardContent>
             {snapshot?.results.length ? (
               <div className="space-y-2">
-                {snapshot.results.map((row) => (
-                  <ResultRow key={row.id || `${row.cpf}-${row.crmStatus}`} row={row} />
+                {snapshot.results.map((row, index) => (
+                  <ResultRow key={row.id || `${row.cpf}-${row.crmStatus}-${index}`} row={row} />
                 ))}
               </div>
             ) : (

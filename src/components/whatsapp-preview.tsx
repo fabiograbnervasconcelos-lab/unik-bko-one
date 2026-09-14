@@ -44,7 +44,7 @@ export function WhatsAppPreview({
       <div className="flex flex-col gap-3 border-b border-white/10 bg-[#202c33] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-sm font-semibold text-white">Preview do WhatsApp</p>
-          <p className="text-xs text-[#8696a0]">
+          <p className="text-xs text-[#d1d7db]">
             {scanning
               ? "Consulta no GED ainda rodando. O envio libera quando terminar."
               : pending.length
@@ -95,7 +95,7 @@ export function WhatsAppPreview({
 
       <div className="max-h-[640px] space-y-4 overflow-y-auto bg-[radial-gradient(circle_at_20%_20%,#13241c_0,#0b141a_42%)] p-4">
         {!pending.length && !sent.length ? (
-          <p className="rounded-lg bg-black/30 px-3 py-8 text-center text-sm text-[#8696a0]">
+          <p className="rounded-lg bg-black/30 px-3 py-8 text-center text-sm text-[#d1d7db]">
             Nada para enviar. Se o GED não achar status, o WhatsApp fica parado.
           </p>
         ) : null}
