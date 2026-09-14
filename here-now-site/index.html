@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Unik BKO One — CRM × GED360</title>
+    <meta
+      name="description"
+      content="Consulta biometria no CRM Unik, confere o status no GED360 e monta o WhatsApp para validar antes de enviar aos grupos BKO One Urgente e Gerentes One."
+    />
+    <style>
+      :root {
+        --bg: #111113;
+        --card: #1c1c1f;
+        --line: rgba(255, 255, 255, 0.1);
+        --text: #f4f4f5;
+        --muted: #a1a1aa;
+        --amber: #fbbf24;
+        --wa: #00a884;
+        --bubble: #005c4b;
+        --wa-bg: #0b141a;
+        --wa-head: #202c33;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.5;
+      }
+      .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px 64px; }
+      .kicker {
+        color: var(--amber);
+        letter-spacing: 0.2em;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        margin: 0 0 8px;
+      }
+      h1 { font-size: clamp(28px, 5vw, 40px); margin: 0 0 12px; letter-spacing: -0.03em; }
+      .lead { color: var(--muted); max-width: 640px; margin: 0 0 28px; }
+      .grid { display: grid; gap: 16px; }
+      @media (min-width: 720px) { .steps { grid-template-columns: 1fr 1fr; } }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 18px;
+      }
+      .card h2 { margin: 0 0 8px; font-size: 16px; }
+      .card p, .card li { color: var(--muted); font-size: 14px; }
+      .card ol { margin: 0; padding-left: 18px; }
+      .wa {
+        overflow: hidden;
+        border-radius: 16px;
+        border: 1px solid rgba(0, 168, 132, 0.35);
+        background: var(--wa-bg);
+      }
+      .wa-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+        padding: 14px 16px;
+        background: var(--wa-head);
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+      }
+      .wa-head strong { display: block; }
+      .wa-head span { color: #d1d7db; font-size: 12px; }
+      .btn {
+        border: 0;
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-weight: 600;
+        cursor: pointer;
+        background: var(--wa);
+        color: #111b21;
+      }
+      .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+      .btn.ghost {
+        background: transparent;
+        color: #d1d7db;
+        border: 1px solid rgba(255,255,255,0.2);
+      }
+      .wa-body {
+        padding: 16px;
+        background: radial-gradient(circle at 20% 20%, #13241c 0, #0b141a 42%);
+        min-height: 280px;
+      }
+      .msg {
+        max-width: 420px;
+        margin-left: auto;
+        background: var(--bubble);
+        color: #e9edef;
+        border-radius: 8px 2px 8px 8px;
+        padding: 10px 12px;
+        font-size: 13px;
+        white-space: pre-wrap;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+      }
+      .meta { color: #8696a0; font-size: 12px; margin: 0 0 8px; }
+      .check { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 13px; color: #d1d7db; }
+      .note {
+        margin-top: 20px;
+        padding: 14px 16px;
+        border-radius: 12px;
+        border: 1px solid rgba(251, 191, 36, 0.25);
+        background: rgba(251, 191, 36, 0.08);
+        color: #fde68a;
+        font-size: 14px;
+      }
+      .toast {
+        display: none;
+        margin-top: 12px;
+        color: var(--wa);
+        font-size: 13px;
+      }
+      footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <p class="kicker">Unik Telecom · BKO One</p>
+      <h1>Alerta de digitalização</h1>
+      <p class="lead">
+        Lê no CRM quem está em <strong>cancelado/bio expirada</strong> ou
+        <strong>aguardando biometria</strong>, consulta o CPF no GED360 e monta
+        o WhatsApp com o status da tela. Você valida o texto e só então envia
+        para <strong>BKO One Urgente</strong> e <strong>Gerentes One</strong>.
+        Se o GED não achar nada, não manda mensagem.
+      </p>
+
+      <div class="grid steps">
+        <section class="card">
+          <h2>Como roda</h2>
+          <ol>
+            <li>Conecta o WhatsApp com QR no painel interno.</li>
+            <li>Entra no CRM Proadmin (Pré-Venda NIO).</li>
+            <li>Consulta cada CPF no GED360 · BrProntoPDV.</li>
+            <li>Mostra o preview do WhatsApp para validar.</li>
+            <li>Envia só o que você marcar.</li>
+          </ol>
+        </section>
+        <section class="card">
+          <h2>O que vai na mensagem</h2>
+          <p>
+            CRM, nome, CPF e o status que estiver na tela do GED360 — por
+            exemplo Doc. Apto para Venda, EM ANÁLISE, ALERTA DE RISCO ou
+            qualquer outro que aparecer. Sem lista fechada.
+          </p>
+        </section>
+      </div>
+
+      <h2 style="margin: 28px 0 12px; font-size: 20px;">Preview do WhatsApp</h2>
+      <p class="lead" style="margin-bottom: 12px;">
+        Abaixo é um exemplo do balão. No painel interno o texto é o da consulta
+        real, e o botão só dispara depois da validação.
+      </p>
+
+      <div class="wa">
+        <div class="wa-head">
+          <div>
+            <strong>Preview do WhatsApp</strong>
+            <span>Para: BKO ONE URGENTE · Gerentes One</span>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn ghost" id="skip" type="button">Não enviar</button>
+            <button class="btn" id="send" type="button">Validar e enviar (1)</button>
+          </div>
+        </div>
+        <div class="wa-body" id="body">
+          <article id="card">
+            <label class="check">
+              <input id="inc" type="checkbox" checked />
+              Incluir · (exemplo) consulta GED
+            </label>
+            <p class="meta">Para: BKO ONE URGENTE · Gerentes One</p>
+            <div class="msg" id="msg">URGENTE — BKO ONE
+
+CRM: aguardando biometria
+Nome: (exemplo) não é um envio real
+CPF: ***.***.***-**
+GED360: Doc. Apto para Venda
+
+Status atual na tela do GED360. Verificar agora.</div>
+            <p class="meta" style="text-align:right; margin:6px 0 0;">prévia · não enviado</p>
+          </article>
+          <p class="toast" id="toast"></p>
+        </div>
+      </div>
+
+      <p class="note">
+        Esta página no here.now é a vitrine pública. O robô (login CRM, GED360,
+        Playwright e WhatsApp vinculado) continua no painel interno — here.now
+        não executa esse processo em segundo plano.
+      </p>
+      <footer>Unik Telecom · uso interno BKO One</footer>
+    </main>
+    <script>
+      const skip = document.getElementById("skip");
+      const send = document.getElementById("send");
+      const inc = document.getElementById("inc");
+      const toast = document.getElementById("toast");
+      const card = document.getElementById("card");
+      function flash(text) {
+        toast.style.display = "block";
+        toast.textContent = text;
+      }
+      inc.addEventListener("change", () => {
+        send.disabled = !inc.checked;
+        card.style.opacity = inc.checked ? "1" : "0.55";
+      });
+      send.addEventListener("click", () => {
+        flash("Aqui é só o preview. O envio real sai no painel interno, depois de validar a fila da consulta.");
+      });
+      skip.addEventListener("click", () => {
+        inc.checked = false;
+        send.disabled = true;
+        card.style.opacity = "0.55";
+        flash("Exemplo retirado da fila. No painel interno isso impede o WhatsApp.");
+      });
+    </script>
+  </body>
+</html>
