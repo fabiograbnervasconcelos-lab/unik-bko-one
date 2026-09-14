@@ -6,8 +6,11 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const settings = loadSettings();
+  const snapshot = getSnapshot();
   return NextResponse.json({
-    ...getSnapshot(),
+    ...snapshot,
+    qrDataUrl: undefined,
+    hasQr: Boolean(snapshot.qrDataUrl),
     settings,
   });
 }

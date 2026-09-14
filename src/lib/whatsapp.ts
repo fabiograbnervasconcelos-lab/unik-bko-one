@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -8,17 +9,19 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import QRCode from "qrcode";
 import pino from "pino";
-import { ensureDataDirs, WHATSAPP_AUTH_DIR } from "@/lib/paths";
+import { DATA_DIR, ensureDataDirs, WHATSAPP_AUTH_DIR } from "@/lib/paths";
 import { loadSettings } from "@/lib/settings";
 import { getSnapshot, log, setWhatsAppState } from "@/lib/store";
 import { scoreGroupName } from "@/lib/text";
 
 const logger = pino({ level: "silent" });
+const QR_PNG_PATH = path.join(DATA_DIR, "whatsapp-qr.png");
 
 type WhatsAppRuntime = {
   socket: WASocket | null;
   connecting: boolean;
   shouldReconnect: boolean;
+  qrPng: Buffer | null;
 };
 
 const globalForWa = globalThis as typeof globalThis & {
@@ -29,6 +32,7 @@ const runtime: WhatsAppRuntime = globalForWa.unikBkoWhatsApp ?? {
   socket: null,
   connecting: false,
   shouldReconnect: true,
+  qrPng: null,
 };
 
 globalForWa.unikBkoWhatsApp = runtime;
@@ -42,6 +46,38 @@ function pickGroup(
     .filter((group) => group.score > 0)
     .sort((a, b) => b.score - a.score);
   return ranked[0] ?? null;
+}
+
+function waitUntil(timeoutMs: number, check: () => boolean) {
+  return new Promise<void>((resolve) => {
+    if (check()) {
+      resolve();
+      return;
+    }
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (check() || Date.now() - started >= timeoutMs) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, 150);
+  });
+}
+
+async function saveQr(qr: string) {
+  const png = await QRCode.toBuffer(qr, {
+    type: "png",
+    margin: 2,
+    width: 480,
+    errorCorrectionLevel: "M",
+    color: { dark: "#111827", light: "#ffffff" },
+  });
+  runtime.qrPng = png;
+  ensureDataDirs();
+  fs.writeFileSync(QR_PNG_PATH, png);
+  const qrDataUrl = `data:image/png;base64,${png.toString("base64")}`;
+  setWhatsAppState("qr", { qrDataUrl, whatsappError: null });
+  log("info", "QR Code gerado. Abra o WhatsApp → Aparelhos conectados → Conectar.");
 }
 
 async function refreshGroups() {
@@ -72,9 +108,20 @@ async function refreshGroups() {
 
 export async function connectWhatsApp() {
   if (runtime.socket) {
+    await waitUntil(12_000, () => {
+      const state = getSnapshot().whatsapp;
+      return state === "qr" || state === "connected" || state === "error" || Boolean(runtime.qrPng);
+    });
     return getSnapshot();
   }
-  if (runtime.connecting) return getSnapshot();
+  if (runtime.connecting) {
+    await waitUntil(12_000, () => Boolean(runtime.socket) || getSnapshot().whatsapp === "error");
+    await waitUntil(12_000, () => {
+      const state = getSnapshot().whatsapp;
+      return state === "qr" || state === "connected" || state === "error" || Boolean(runtime.qrPng);
+    });
+    return getSnapshot();
+  }
   runtime.connecting = true;
   runtime.shouldReconnect = true;
   ensureDataDirs();
@@ -102,15 +149,14 @@ export async function connectWhatsApp() {
     runtime.socket.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect, qr } = update;
       if (qr) {
-        const qrDataUrl = await QRCode.toDataURL(qr, {
-          margin: 1,
-          width: 420,
-          color: { dark: "#111827", light: "#ffffff" },
-        });
-        setWhatsAppState("qr", { qrDataUrl, whatsappError: null });
-        log("info", "QR Code gerado. Abra o WhatsApp → Aparelhos conectados → Conectar.");
+        try {
+          await saveQr(qr);
+        } catch (error) {
+          log("error", `Não consegui desenhar o QR: ${String(error)}`);
+        }
       }
       if (connection === "open") {
+        runtime.qrPng = null;
         setWhatsAppState("connected", { qrDataUrl: null, whatsappError: null });
         log("info", "WhatsApp conectado.");
         await refreshGroups().catch((error) => {
@@ -124,7 +170,9 @@ export async function connectWhatsApp() {
         runtime.socket = null;
         runtime.connecting = false;
         if (loggedOut) {
+          runtime.qrPng = null;
           fs.rmSync(WHATSAPP_AUTH_DIR, { recursive: true, force: true });
+          fs.rmSync(QR_PNG_PATH, { force: true });
           setWhatsAppState("disconnected", {
             qrDataUrl: null,
             groups: [],
@@ -138,14 +186,20 @@ export async function connectWhatsApp() {
           }
           return;
         }
-        setWhatsAppState("connecting", { qrDataUrl: null });
-        log("warn", "WhatsApp caiu. Reconectando...");
+        // Keep the last QR on screen while Baileys asks for a fresh one.
+        setWhatsAppState(getSnapshot().qrDataUrl ? "qr" : "connecting", { whatsappError: null });
+        log("warn", "WhatsApp renovando o QR...");
         if (runtime.shouldReconnect) {
           setTimeout(() => {
             connectWhatsApp().catch((error) => log("error", String(error)));
-          }, 2000);
+          }, 1500);
         }
       }
+    });
+
+    await waitUntil(15_000, () => {
+      const state = getSnapshot().whatsapp;
+      return state === "qr" || state === "connected" || state === "error" || Boolean(runtime.qrPng);
     });
   } catch (error) {
     runtime.connecting = false;
@@ -158,6 +212,26 @@ export async function connectWhatsApp() {
   }
 
   return getSnapshot();
+}
+
+export async function getQrPng(): Promise<Buffer | null> {
+  if (runtime.qrPng) return runtime.qrPng;
+  if (fs.existsSync(QR_PNG_PATH)) {
+    runtime.qrPng = fs.readFileSync(QR_PNG_PATH);
+    return runtime.qrPng;
+  }
+  await connectWhatsApp();
+  if (runtime.qrPng) return runtime.qrPng;
+  if (fs.existsSync(QR_PNG_PATH)) {
+    runtime.qrPng = fs.readFileSync(QR_PNG_PATH);
+    return runtime.qrPng;
+  }
+  const dataUrl = getSnapshot().qrDataUrl;
+  if (dataUrl?.startsWith("data:image/png;base64,")) {
+    runtime.qrPng = Buffer.from(dataUrl.split(",")[1] ?? "", "base64");
+    return runtime.qrPng;
+  }
+  return null;
 }
 
 export async function disconnectWhatsApp() {

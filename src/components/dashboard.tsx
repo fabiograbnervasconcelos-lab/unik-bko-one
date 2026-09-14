@@ -19,7 +19,7 @@ import type { AppSnapshot, LeadResult, LogLine, WhatsAppGroup } from "@/lib/stor
 import type { AppSettings } from "@/lib/settings";
 import { GED_ANALYSIS_STATUSES } from "@/lib/text";
 
-type StatusPayload = AppSnapshot & { settings: AppSettings };
+type StatusPayload = AppSnapshot & { settings: AppSettings; hasQr?: boolean };
 
 const EMPTY_SETTINGS: AppSettings = {
   crmUser: "",
@@ -100,6 +100,8 @@ export function Dashboard() {
   const [running, setRunning] = useState(false);
   const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [qrTick, setQrTick] = useState(0);
+  const [qrFailed, setQrFailed] = useState(false);
   const settingsLoaded = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -113,11 +115,26 @@ export function Dashboard() {
   }, []);
 
   useEffect(() => {
-    fetch("/api/whatsapp/connect", { method: "POST" }).catch(() => undefined);
-    const id = window.setInterval(() => {
+    let cancelled = false;
+    fetch("/api/whatsapp/connect", { method: "POST" })
+      .then(() => {
+        if (!cancelled) {
+          setQrTick((value) => value + 1);
+          return refresh();
+        }
+      })
+      .catch(() => undefined);
+    const statusId = window.setInterval(() => {
       void refresh();
     }, 1200);
-    return () => window.clearInterval(id);
+    const qrId = window.setInterval(() => {
+      setQrTick((value) => value + 1);
+    }, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(statusId);
+      window.clearInterval(qrId);
+    };
   }, [refresh]);
 
   async function saveSettings() {
@@ -217,23 +234,31 @@ export function Dashboard() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex min-h-[280px] items-center justify-center rounded-xl bg-white p-4">
-              {snapshot?.qrDataUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={snapshot.qrDataUrl}
-                  alt="QR Code do WhatsApp"
-                  className="size-[240px] md:size-[280px]"
-                />
-              ) : connected ? (
+            <div className="flex min-h-[300px] items-center justify-center rounded-xl bg-white p-4">
+              {connected ? (
                 <div className="space-y-2 text-center text-zinc-800">
                   <p className="text-lg font-semibold">Sessão ativa</p>
                   <p className="text-sm">Pode rodar a verificação. Não precisa escanear de novo.</p>
                 </div>
               ) : (
-                <p className="text-center text-sm text-zinc-600">
-                  {snapshot?.whatsappError || "Gerando QR Code..."}
-                </p>
+                <div className="flex flex-col items-center gap-3">
+                  {/* Native img so the QR loads even before React state updates. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`/api/whatsapp/qr?t=${qrTick}`}
+                    alt="QR Code do WhatsApp"
+                    width={280}
+                    height={280}
+                    className={qrFailed ? "hidden" : "h-[280px] w-[280px] bg-white"}
+                    onLoad={() => setQrFailed(false)}
+                    onError={() => setQrFailed(true)}
+                  />
+                  {qrFailed ? (
+                    <p className="text-center text-sm text-zinc-600">
+                      {snapshot?.whatsappError || "Gerando QR Code... aguarde uns segundos."}
+                    </p>
+                  ) : null}
+                </div>
               )}
             </div>
             <div className="space-y-2">
