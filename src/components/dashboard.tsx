@@ -20,6 +20,8 @@ import { isPendingWhatsApp } from "@/lib/message";
 
 type StatusPayload = AppSnapshot & { settings: AppSettings; hasQr?: boolean };
 
+const EMPTY_RESULTS: LeadResult[] = [];
+
 const EMPTY_SETTINGS: AppSettings = {
   crmUser: "",
   crmPass: "",
@@ -95,9 +97,8 @@ function ResultRow({ row }: { row: LeadResult }) {
 }
 
 export function Dashboard() {
-  const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<StatusPayload | null>(null);
   const [saving, setSaving] = useState(false);
-  const [running, setRunning] = useState(false);
   const [sending, setSending] = useState(false);
   const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -127,6 +128,24 @@ export function Dashboard() {
     const response = await fetch("/api/status", { cache: "no-store" });
     const data = (await response.json()) as StatusPayload;
     setSnapshot(data);
+    const form = formRef.current;
+    if (form && form.dataset.filled !== "1" && data.settings) {
+      const assign = (name: string, value: string) => {
+        const field = form.elements.namedItem(name);
+        if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) {
+          field.value = value;
+        }
+      };
+      assign("crmUser", data.settings.crmUser);
+      assign("crmPass", data.settings.crmPass);
+      assign("gedUser", data.settings.gedUser);
+      assign("gedPass", data.settings.gedPass);
+      assign("gedDomain", data.settings.gedDomain);
+      assign("groupBko", data.settings.groupBko);
+      assign("groupGerentes", data.settings.groupGerentes);
+      assign("extraCpfs", data.settings.extraCpfs);
+      form.dataset.filled = "1";
+    }
   }, []);
 
   useEffect(() => {
@@ -171,18 +190,16 @@ export function Dashboard() {
   }
 
   async function runNow() {
-    setRunning(true);
     setNotice(null);
     await saveSettings();
     try {
       const response = await fetch("/api/run", { method: "POST" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Falha na verificação.");
-      setNotice(data.step || "Consulta pronta. Confira o preview do WhatsApp.");
+      setNotice(data.step || "Consulta iniciada. Acompanhe o log e o preview.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
-      setRunning(false);
       void refresh();
     }
   }
@@ -245,8 +262,9 @@ export function Dashboard() {
   const groups: WhatsAppGroup[] = snapshot?.groups ?? [];
   const logs = useMemo(() => [...(snapshot?.logs ?? [])].reverse(), [snapshot?.logs]);
   const connected = snapshot?.whatsapp === "connected";
-  const scanning = snapshot?.job === "running" && !sending;
-  const results = snapshot?.results ?? [];
+  const jobRunning = snapshot?.job === "running";
+  const scanning = jobRunning && !sending;
+  const results = snapshot?.results ?? EMPTY_RESULTS;
   const pendingIds = useMemo(
     () => results.filter(isPendingWhatsApp).map((row) => row.id),
     [results],
@@ -255,22 +273,27 @@ export function Dashboard() {
   useEffect(() => {
     if (!results.length) {
       seenDraftIds.current.clear();
-      setSelectedIds(new Set());
+      setSelectedIds((prev) => (prev.size === 0 ? prev : new Set()));
       return;
     }
     const pending = new Set(pendingIds);
     setSelectedIds((prev) => {
       const next = new Set(prev);
+      let changed = false;
       for (const id of pending) {
         if (!seenDraftIds.current.has(id)) {
           next.add(id);
           seenDraftIds.current.add(id);
+          changed = true;
         }
       }
       for (const id of next) {
-        if (!pending.has(id)) next.delete(id);
+        if (!pending.has(id)) {
+          next.delete(id);
+          changed = true;
+        }
       }
-      return next;
+      return changed ? next : prev;
     });
   }, [pendingIds, results.length]);
 
@@ -491,8 +514,8 @@ export function Dashboard() {
               <Button type="button" variant="outline" disabled={saving} onClick={() => void saveSettings()}>
                 {saving ? "Salvando..." : "Salvar acessos"}
               </Button>
-              <Button type="button" disabled={running || sending || !connected} onClick={() => void runNow()}>
-                {running ? "Consultando..." : "Rodar verificação agora"}
+              <Button type="button" disabled={jobRunning || sending || !connected} onClick={() => void runNow()}>
+                {jobRunning && !sending ? "Consultando..." : "Rodar verificação agora"}
               </Button>
               <Button
                 type="button"

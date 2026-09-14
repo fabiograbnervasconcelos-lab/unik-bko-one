@@ -59,7 +59,7 @@ function finishScan(results: LeadResult[], stopped: boolean) {
   log("info", "Consulta concluída. Nenhuma mensagem para o WhatsApp.");
 }
 
-export async function runPipeline() {
+export function startPipeline() {
   if (getSnapshot().job === "running") {
     throw new Error("Já existe uma verificação em andamento.");
   }
@@ -77,6 +77,21 @@ export async function runPipeline() {
 
   setJob("running", { error: null, step: "Iniciando verificação..." });
   clearStop();
+  void executePipeline(settings).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (getSnapshot().job === "running") {
+      setJob("error", { error: message, step: "Verificação interrompida." });
+    }
+    log("error", message);
+  });
+  return getSnapshot();
+}
+
+export async function runPipeline() {
+  return startPipeline();
+}
+
+async function executePipeline(settings: ReturnType<typeof loadSettings>) {
   setResults([]);
   log("info", "Verificação iniciada: CRM → GED360. WhatsApp só depois de validar na tela.");
 
@@ -158,18 +173,16 @@ export async function runPipeline() {
     }
 
     finishScan(results, false);
-    return getSnapshot();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setJob("error", { error: message, step: "Verificação interrompida." });
     log("error", message);
-    throw error;
   } finally {
     await browser.close().catch(() => undefined);
   }
 }
 
-export async function sendApprovedMessages(ids: string[]) {
+export function startSend(ids: string[]) {
   if (getSnapshot().job === "running") {
     throw new Error("Aguarde a consulta ou o envio atual terminar.");
   }
@@ -187,8 +200,25 @@ export async function sendApprovedMessages(ids: string[]) {
 
   setJob("running", { error: null, step: `Enviando WhatsApp 0/${queue.length}...` });
   clearStop();
-  log("info", `Envio validado: ${queue.length} mensagem(ns) para os grupos.`);
+  void executeSend(queue).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    log("error", message);
+    if (getSnapshot().job === "running") {
+      setJob("error", { error: message, step: "Envio interrompido." });
+    }
+  });
+  return getSnapshot();
+}
 
+export async function sendApprovedMessages(ids: string[]) {
+  return startSend(ids);
+}
+
+async function executeSend(
+  queue: LeadResult[],
+) {
+
+  log("info", `Envio validado: ${queue.length} mensagem(ns) para os grupos.`);
   let sent = 0;
   for (const row of queue) {
     if (isStopRequested()) {

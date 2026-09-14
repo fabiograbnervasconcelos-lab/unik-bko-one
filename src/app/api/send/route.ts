@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { discardMessages, sendApprovedMessages } from "@/lib/pipeline";
+import { discardMessages, startSend } from "@/lib/pipeline";
 import { getSnapshot } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     if (body.discard) {
       return NextResponse.json(discardMessages(ids));
     }
-    const snapshot = await sendApprovedMessages(ids);
+    const snapshot = startSend(ids);
     return NextResponse.json(snapshot);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
