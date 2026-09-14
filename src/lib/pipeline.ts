@@ -25,9 +25,9 @@ function buildAlertMessage(lead: LeadResult) {
     `CRM: ${lead.crmStatus}`,
     `Nome: ${lead.name}`,
     `CPF: ${lead.cpf}`,
-    `GED360 Resultado da Análise: ${lead.gedResult}`,
+    `GED360: ${lead.gedResult}`,
     "",
-    "Há digitalização no GED com um dos status de análise. Verificar agora.",
+    "Status atual na tela do GED360. Verificar agora.",
   ].join("\n");
 }
 
@@ -90,7 +90,7 @@ export async function runPipeline() {
       try {
         const lookup = await lookupGedCpf(gedPage, lead.cpf, firstGed);
         firstGed = false;
-        const shouldNotify = Boolean(lookup.hasDigitization && lookup.result);
+        const shouldNotify = Boolean(lookup.result);
         const row: LeadResult = {
           name: lead.name,
           cpf: lead.cpf,

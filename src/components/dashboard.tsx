@@ -15,7 +15,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import type { AppSnapshot, LeadResult, LogLine, WhatsAppGroup } from "@/lib/store";
 import type { AppSettings } from "@/lib/settings";
-import { GED_ANALYSIS_STATUSES } from "@/lib/text";
 
 type StatusPayload = AppSnapshot & { settings: AppSettings; hasQr?: boolean };
 
@@ -74,9 +73,7 @@ function ResultRow({ row }: { row: LeadResult }) {
           {row.gedResult ? (
             <Badge>{row.gedResult}</Badge>
           ) : (
-            <Badge variant="secondary">
-              {row.hasDigitization ? "Sem status alvo" : "Sem digitalização"}
-            </Badge>
+            <Badge variant="secondary">Não encontrado</Badge>
           )}
           {row.notified ? <Badge variant="outline">WhatsApp enviado</Badge> : null}
         </div>
@@ -215,8 +212,8 @@ export function Dashboard() {
           <p className="max-w-2xl text-sm text-muted-foreground">
             Lê no CRM quem está em <strong>cancelado/bio expirada</strong> ou{" "}
             <strong>aguardando biometria</strong>, consulta o CPF no GED360 e avisa os
-            grupos <strong>BKO One Urgente</strong> e <strong>Gerentes One</strong> se a
-            análise estiver em um dos status alvo.
+            grupos <strong>BKO One Urgente</strong> e <strong>Gerentes One</strong> com o
+            status que estiver na tela. Se o GED não achar nada, não manda WhatsApp.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -439,8 +436,7 @@ export function Dashboard() {
           <CardHeader>
             <CardTitle>Resultados</CardTitle>
             <CardDescription>
-              Alerta só se abrir a tela de digitalização e o Resultado da Análise for um
-              destes: {GED_ANALYSIS_STATUSES.join(" · ")}.
+              WhatsApp só se o GED360 mostrar um status. Se não achar nada, não envia.
             </CardDescription>
           </CardHeader>
           <CardContent>

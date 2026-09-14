@@ -8,14 +8,7 @@ O sistema:
 2. Entra no CRM [Proadmin Unik](https://uniktelecom.com.br/proadmin/login.php).
 3. Filtra quem está em **cancelado/bio expirada** e **aguardando biometria**.
 4. Entra no [GED360 BrProntoPDV](https://ged360.niointernet.com.br/brprontopdv/autenticacao/index), aceita cookies e abre **Consultar → Digitalizações → busca unitária CPF**.
-5. Se aparecer a tela de digitalização e o **Resultado da Análise** for um destes, manda WhatsApp para os grupos **BKO One Urgente** e **Gerentes One**:
-   - Doc. Apto para Venda
-   - Concluído
-   - NÃO PASSÍVEL DE ANÁLISE
-   - ALERTA DE RISCO
-   - NEUTRO
-   - EM ANÁLISE
-   - COM RISCO
+5. Se o GED360 mostrar um status na tela (Resultado da Análise / Status), manda esse texto no WhatsApp para **BKO One Urgente** e **Gerentes One**. Se a busca não achar nada, **não envia** mensagem.
 
 ## Como rodar
 

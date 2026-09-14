@@ -5,6 +5,7 @@ import {
   extractGedAnalysis,
   formatCpf,
   hasDigitizationScreen,
+  looksLikeEmptyGed,
   onlyDigits,
 } from "@/lib/text";
 
@@ -129,6 +130,72 @@ async function searchCpf(page: Page, cpf: string) {
   await page.waitForTimeout(1800);
 }
 
+async function readGedStatusFromDom(page: Page): Promise<string | null> {
+  try {
+    const value = await page.evaluate(() => {
+      const normalize = (s: string) => s.replace(/\s+/g, " ").trim();
+      const labelRe = /resultado da an[aá]lise|status da an[aá]lise|status da digitaliza/i;
+      const emptyRe =
+        /nenhum registro|n[aã]o (foi )?encontr|sem resultado|nenhuma digitaliza|registro n[aã]o localizado/i;
+
+      const fromNext = (el: Element): string | null => {
+        const next = el.nextElementSibling;
+        if (next) {
+          const v = normalize(next.textContent || "");
+          if (v && !labelRe.test(v) && v.length >= 2 && v.length <= 80 && !emptyRe.test(v)) {
+            return v;
+          }
+        }
+        const parent = el.parentElement;
+        if (parent) {
+          const kids = Array.from(parent.children);
+          const idx = kids.indexOf(el);
+          if (idx >= 0 && kids[idx + 1]) {
+            const v = normalize(kids[idx + 1].textContent || "");
+            if (v && !labelRe.test(v) && v.length >= 2 && v.length <= 80 && !emptyRe.test(v)) {
+              return v;
+            }
+          }
+        }
+        const row = el.closest("tr");
+        if (row) {
+          const cells = Array.from(row.querySelectorAll("th, td"));
+          const i = cells.indexOf(el as HTMLTableCellElement);
+          if (i >= 0 && cells[i + 1]) {
+            const v = normalize(cells[i + 1].textContent || "");
+            if (v && v.length >= 2 && v.length <= 80 && !emptyRe.test(v)) return v;
+          }
+        }
+        const own = normalize(el.textContent || "");
+        const inline = own.match(
+          /(?:resultado da an[aá]lise|status da an[aá]lise|status da digitaliza(?:ção|cao)?)\s*[:\-–—]?\s*(.+)/i,
+        );
+        if (inline?.[1]) {
+          const v = normalize(inline[1]);
+          if (v && v.length >= 2 && v.length <= 80 && !emptyRe.test(v) && !labelRe.test(v)) {
+            return v;
+          }
+        }
+        return null;
+      };
+
+      const candidates = Array.from(
+        document.querySelectorAll("td, th, dt, dd, label, span, strong, b, p, div, li"),
+      );
+      for (const el of candidates) {
+        const t = normalize(el.textContent || "");
+        if (!labelRe.test(t) || t.length > 160) continue;
+        const found = fromNext(el);
+        if (found) return found;
+      }
+      return null;
+    });
+    return value?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function lookupGedCpf(page: Page, cpf: string, first: boolean): Promise<GedLookup> {
   if (first) {
     await openDigitalizacoes(page);
@@ -137,14 +204,15 @@ export async function lookupGedCpf(page: Page, cpf: string, first: boolean): Pro
   await searchCpf(page, cpf);
   await screenshot(page, `ged-${onlyDigits(cpf)}`);
   const text = await visibleText(page);
-  const hasDigitization = hasDigitizationScreen(text);
-  const result = hasDigitization ? extractGedAnalysis(text) : null;
-  if (!hasDigitization) {
-    log("info", `GED ${formatCpf(cpf)}: sem tela de digitalização.`);
-  } else if (result) {
-    log("info", `GED ${formatCpf(cpf)}: Resultado da Análise = ${result}`);
+  const empty = looksLikeEmptyGed(text);
+  const fromDom = empty ? null : await readGedStatusFromDom(page);
+  const fromText = empty ? null : extractGedAnalysis(text);
+  const result = fromDom || fromText;
+  const hasDigitization = Boolean(result) || (!empty && hasDigitizationScreen(text));
+  if (!result) {
+    log("info", `GED ${formatCpf(cpf)}: nada encontrado — WhatsApp não será enviado.`);
   } else {
-    log("warn", `GED ${formatCpf(cpf)}: digitalização abriu, mas o resultado não bateu com os status pedais.`);
+    log("info", `GED ${formatCpf(cpf)}: status na tela = ${result}`);
   }
   return { cpf: formatCpf(cpf), hasDigitization, result };
 }

@@ -49,59 +49,47 @@ export function matchCrmStatus(text: string): CrmStatus | null {
   return null;
 }
 
-export const GED_ANALYSIS_STATUSES = [
-  "Doc. Apto para Venda",
-  "Concluído",
-  "NÃO PASSÍVEL DE ANÁLISE",
-  "ALERTA DE RISCO",
-  "NEUTRO",
-  "EM ANÁLISE",
-  "COM RISCO",
-] as const;
+const EMPTY_GED_HINT =
+  /nenhum registro|nao (foi )?encontr|n[aã]o (foi )?encontr|sem resultado|nenhuma digitaliza|registro n[aã]o localizado|cpf n[aã]o localizado|sem digitaliza/i;
 
-const GED_ANALYSIS_NORMALIZED = [
-  { label: "Doc. Apto para Venda", keys: ["doc apto para venda", "apto para venda"] },
-  { label: "Concluído", keys: ["concluido"] },
-  { label: "NÃO PASSÍVEL DE ANÁLISE", keys: ["nao passivel de analise"] },
-  { label: "ALERTA DE RISCO", keys: ["alerta de risco"] },
-  { label: "NEUTRO", keys: ["neutro"] },
-  { label: "EM ANÁLISE", keys: ["em analise"] },
-  { label: "COM RISCO", keys: ["com risco"] },
-] as const;
+const NEXT_GED_LABEL =
+  /(?:\bprotocolo\b|\bcpf\b|\bcnpj\b|\bdata\s|\borigem\b|\boperadora\b|\bvisualizar\b|\bfiltrar\b)/i;
 
-export function matchGedAnalysis(text: string): string | null {
-  const n = normalizeText(text);
-  if (!n) return null;
-  for (const item of GED_ANALYSIS_NORMALIZED) {
-    if (item.keys.some((key) => n.includes(key))) {
-      return item.label;
+export function looksLikeEmptyGed(pageText: string) {
+  return EMPTY_GED_HINT.test(pageText);
+}
+
+function cleanGedStatus(raw: string): string | null {
+  let value = raw.replace(/\s+/g, " ").trim();
+  const cut = value.search(NEXT_GED_LABEL);
+  if (cut > 0) value = value.slice(0, cut).trim();
+  value = value.replace(/^[:.\-–—|/\\]+/, "").replace(/[:.\-–—|/\\]+$/, "").trim();
+  if (value.length < 2 || value.length > 80) return null;
+  if (EMPTY_GED_HINT.test(value)) return null;
+  if (/^(resultado da an[aá]lise|an[aá]lise|status)$/i.test(value)) return null;
+  return value;
+}
+
+/** Pega o texto que aparece em Resultado da Análise / Status na tela do GED. */
+export function extractGedAnalysis(pageText: string): string | null {
+  const patterns = [
+    /resultado da an[aá]lise\s*[:\-–—]?\s*([^\n\r|]{2,120})/i,
+    /status da an[aá]lise\s*[:\-–—]?\s*([^\n\r|]{2,120})/i,
+    /status da digitaliza(?:ção|cao)\s*[:\-–—]?\s*([^\n\r|]{2,120})/i,
+  ];
+  for (const re of patterns) {
+    const match = pageText.match(re);
+    if (match?.[1]) {
+      const cleaned = cleanGedStatus(match[1]);
+      if (cleaned) return cleaned;
     }
   }
   return null;
 }
 
-export function extractGedAnalysis(pageText: string): string | null {
-  const analysisBlock = pageText.match(
-    /resultado da an[aá]lise[:\s]*([^\n\r|]{3,80})/i,
-  );
-  if (analysisBlock?.[1]) {
-    const direct = matchGedAnalysis(analysisBlock[1]);
-    if (direct) return direct;
-  }
-  return matchGedAnalysis(pageText);
-}
-
-export function looksLikeEmptyGed(pageText: string) {
-  return /nenhum registro|nao (foi )?encontr|n[aã]o (foi )?encontr|sem resultado|nenhuma digitaliza|registro n[aã]o localizado/i.test(
-    pageText,
-  );
-}
-
 export function hasDigitizationScreen(pageText: string) {
   if (looksLikeEmptyGed(pageText)) return false;
-  return /resultado da an[aá]lise|digitaliza|documento|visualizar/i.test(
-    pageText,
-  );
+  return /resultado da an[aá]lise|digitaliza|documento|visualizar/i.test(pageText);
 }
 
 export function scoreGroupName(name: string, needles: string[]) {
