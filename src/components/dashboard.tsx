@@ -102,13 +102,21 @@ export function Dashboard() {
   const [notice, setNotice] = useState<string | null>(null);
   const [qrTick, setQrTick] = useState(0);
   const [qrFailed, setQrFailed] = useState(false);
+  const [showCrmPass, setShowCrmPass] = useState(false);
+  const [showGedPass, setShowGedPass] = useState(false);
   const settingsLoaded = useRef(false);
+  const userEdited = useRef(false);
+
+  const patchSettings = useCallback((patch: Partial<AppSettings>) => {
+    userEdited.current = true;
+    setSettings((current) => ({ ...current, ...patch }));
+  }, []);
 
   const refresh = useCallback(async () => {
     const response = await fetch("/api/status", { cache: "no-store" });
     const data = (await response.json()) as StatusPayload;
     setSnapshot(data);
-    if (!settingsLoaded.current && data.settings) {
+    if (!settingsLoaded.current && !userEdited.current && data.settings) {
       settingsLoaded.current = true;
       setSettings(data.settings);
     }
@@ -306,20 +314,33 @@ export function Dashboard() {
                 <Label htmlFor="crmUser">Usuário</Label>
                 <Input
                   id="crmUser"
+                  name="crm-user"
                   value={settings.crmUser}
-                  onChange={(event) => setSettings({ ...settings, crmUser: event.target.value })}
-                  autoComplete="username"
+                  onChange={(event) => patchSettings({ crmUser: event.target.value })}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
                 />
               </div>
               <div className="space-y-1">
                 <Label htmlFor="crmPass">Senha</Label>
                 <Input
                   id="crmPass"
-                  type="password"
+                  name="crm-password"
+                  type={showCrmPass ? "text" : "password"}
                   value={settings.crmPass}
-                  onChange={(event) => setSettings({ ...settings, crmPass: event.target.value })}
-                  autoComplete="current-password"
+                  onChange={(event) => patchSettings({ crmPass: event.target.value })}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
                 />
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                  onClick={() => setShowCrmPass((value) => !value)}
+                >
+                  {showCrmPass ? "Ocultar senha" : "Mostrar senha"}
+                </button>
               </div>
             </div>
             <div className="space-y-3">
@@ -330,18 +351,33 @@ export function Dashboard() {
                 <Label htmlFor="gedUser">Login</Label>
                 <Input
                   id="gedUser"
+                  name="ged-user"
                   value={settings.gedUser}
-                  onChange={(event) => setSettings({ ...settings, gedUser: event.target.value })}
+                  onChange={(event) => patchSettings({ gedUser: event.target.value })}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
                 />
               </div>
               <div className="space-y-1">
                 <Label htmlFor="gedPass">Senha</Label>
                 <Input
                   id="gedPass"
-                  type="password"
+                  name="ged-password"
+                  type={showGedPass ? "text" : "password"}
                   value={settings.gedPass}
-                  onChange={(event) => setSettings({ ...settings, gedPass: event.target.value })}
+                  onChange={(event) => patchSettings({ gedPass: event.target.value })}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
                 />
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                  onClick={() => setShowGedPass((value) => !value)}
+                >
+                  {showGedPass ? "Ocultar senha" : "Mostrar senha"}
+                </button>
               </div>
               <div className="space-y-1">
                 <Label htmlFor="gedDomain">Domínio</Label>
@@ -350,8 +386,7 @@ export function Dashboard() {
                   className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
                   value={settings.gedDomain}
                   onChange={(event) =>
-                    setSettings({
-                      ...settings,
+                    patchSettings({
                       gedDomain: event.target.value === "2" ? "2" : "1",
                     })
                   }
@@ -366,7 +401,7 @@ export function Dashboard() {
               <Input
                 id="groupBko"
                 value={settings.groupBko}
-                onChange={(event) => setSettings({ ...settings, groupBko: event.target.value })}
+                onChange={(event) => patchSettings({ groupBko: event.target.value })}
               />
             </div>
             <div className="space-y-1 md:col-span-2">
@@ -374,9 +409,7 @@ export function Dashboard() {
               <Input
                 id="groupGerentes"
                 value={settings.groupGerentes}
-                onChange={(event) =>
-                  setSettings({ ...settings, groupGerentes: event.target.value })
-                }
+                onChange={(event) => patchSettings({ groupGerentes: event.target.value })}
               />
             </div>
             <div className="space-y-1 md:col-span-2">
@@ -386,7 +419,7 @@ export function Dashboard() {
                 rows={3}
                 placeholder="Use só para testar um CPF fora do CRM"
                 value={settings.extraCpfs}
-                onChange={(event) => setSettings({ ...settings, extraCpfs: event.target.value })}
+                onChange={(event) => patchSettings({ extraCpfs: event.target.value })}
               />
             </div>
             <div className="flex flex-wrap gap-2 md:col-span-2">
