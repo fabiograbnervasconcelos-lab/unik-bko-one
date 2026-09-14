@@ -10,11 +10,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Textarea } from "@/components/ui/textarea";
 import type { AppSnapshot, LeadResult, LogLine, WhatsAppGroup } from "@/lib/store";
 import type { AppSettings } from "@/lib/settings";
 import { GED_ANALYSIS_STATUSES } from "@/lib/text";
@@ -95,31 +93,34 @@ function ResultRow({ row }: { row: LeadResult }) {
 
 export function Dashboard() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
-  const [settings, setSettings] = useState<AppSettings>(EMPTY_SETTINGS);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [qrTick, setQrTick] = useState(0);
   const [qrFailed, setQrFailed] = useState(false);
-  const [showCrmPass, setShowCrmPass] = useState(false);
-  const [showGedPass, setShowGedPass] = useState(false);
-  const settingsLoaded = useRef(false);
-  const userEdited = useRef(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
-  const patchSettings = useCallback((patch: Partial<AppSettings>) => {
-    userEdited.current = true;
-    setSettings((current) => ({ ...current, ...patch }));
-  }, []);
+  function readForm(): AppSettings {
+    const form = formRef.current;
+    if (!form) return EMPTY_SETTINGS;
+    const data = new FormData(form);
+    return {
+      crmUser: String(data.get("crmUser") ?? "").trim(),
+      crmPass: String(data.get("crmPass") ?? ""),
+      gedUser: String(data.get("gedUser") ?? "").trim(),
+      gedPass: String(data.get("gedPass") ?? ""),
+      gedDomain: data.get("gedDomain") === "2" ? "2" : "1",
+      groupBko: String(data.get("groupBko") ?? "bko one urgente"),
+      groupGerentes: String(data.get("groupGerentes") ?? "gerentes one"),
+      extraCpfs: String(data.get("extraCpfs") ?? ""),
+    };
+  }
 
   const refresh = useCallback(async () => {
     const response = await fetch("/api/status", { cache: "no-store" });
     const data = (await response.json()) as StatusPayload;
     setSnapshot(data);
-    if (!settingsLoaded.current && !userEdited.current && data.settings) {
-      settingsLoaded.current = true;
-      setSettings(data.settings);
-    }
   }, []);
 
   useEffect(() => {
@@ -152,7 +153,7 @@ export function Dashboard() {
       const response = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings),
+        body: JSON.stringify(readForm()),
       });
       if (!response.ok) throw new Error("Não foi possível salvar.");
       setNotice("Credenciais salvas neste servidor.");
@@ -301,46 +302,42 @@ export function Dashboard() {
           <CardHeader>
             <CardTitle>2. Acessos do CRM e do GED360</CardTitle>
             <CardDescription>
-              Salvos só neste servidor, fora do git. O GED sempre aceita cookies antes do
-              login. Domínio padrão: BrPronto.
+              A senha fica visível de propósito neste painel, para o navegador não bloquear
+              o campo. Salva só neste servidor.
             </CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-2">
+          <CardContent>
+            <form ref={formRef} className="relative z-20 grid gap-4 md:grid-cols-2" autoComplete="off" onSubmit={(event) => event.preventDefault()}>
             <div className="space-y-3">
               <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                 CRM Unik · proadmin
               </p>
               <div className="space-y-1">
                 <Label htmlFor="crmUser">Usuário</Label>
-                <Input
+                <input
                   id="crmUser"
-                  name="crm-user"
-                  value={settings.crmUser}
-                  onChange={(event) => patchSettings({ crmUser: event.target.value })}
+                  name="crmUser"
+                  type="text"
+                  className="h-11 w-full rounded-md border border-zinc-500 bg-white px-3 text-base text-zinc-900"
                   autoComplete="off"
                   autoCapitalize="none"
+                  autoCorrect="off"
                   spellCheck={false}
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="crmPass">Senha</Label>
-                <Input
+                <Label htmlFor="crmPass">Senha do CRM</Label>
+                <input
                   id="crmPass"
-                  name="crm-password"
-                  type={showCrmPass ? "text" : "password"}
-                  value={settings.crmPass}
-                  onChange={(event) => patchSettings({ crmPass: event.target.value })}
+                  name="crmPass"
+                  type="text"
+                  className="h-11 w-full rounded-md border border-zinc-500 bg-white px-3 text-base text-zinc-900"
                   autoComplete="off"
                   autoCapitalize="none"
+                  autoCorrect="off"
                   spellCheck={false}
+                  placeholder="Digite a senha aqui"
                 />
-                <button
-                  type="button"
-                  className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-                  onClick={() => setShowCrmPass((value) => !value)}
-                >
-                  {showCrmPass ? "Ocultar senha" : "Mostrar senha"}
-                </button>
               </div>
             </div>
             <div className="space-y-3">
@@ -349,47 +346,38 @@ export function Dashboard() {
               </p>
               <div className="space-y-1">
                 <Label htmlFor="gedUser">Login</Label>
-                <Input
+                <input
                   id="gedUser"
-                  name="ged-user"
-                  value={settings.gedUser}
-                  onChange={(event) => patchSettings({ gedUser: event.target.value })}
+                  name="gedUser"
+                  type="text"
+                  className="h-11 w-full rounded-md border border-zinc-500 bg-white px-3 text-base text-zinc-900"
                   autoComplete="off"
                   autoCapitalize="none"
+                  autoCorrect="off"
                   spellCheck={false}
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="gedPass">Senha</Label>
-                <Input
+                <Label htmlFor="gedPass">Senha do GED</Label>
+                <input
                   id="gedPass"
-                  name="ged-password"
-                  type={showGedPass ? "text" : "password"}
-                  value={settings.gedPass}
-                  onChange={(event) => patchSettings({ gedPass: event.target.value })}
+                  name="gedPass"
+                  type="text"
+                  className="h-11 w-full rounded-md border border-zinc-500 bg-white px-3 text-base text-zinc-900"
                   autoComplete="off"
                   autoCapitalize="none"
+                  autoCorrect="off"
                   spellCheck={false}
+                  placeholder="Digite a senha aqui"
                 />
-                <button
-                  type="button"
-                  className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-                  onClick={() => setShowGedPass((value) => !value)}
-                >
-                  {showGedPass ? "Ocultar senha" : "Mostrar senha"}
-                </button>
               </div>
               <div className="space-y-1">
                 <Label htmlFor="gedDomain">Domínio</Label>
                 <select
                   id="gedDomain"
-                  className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm"
-                  value={settings.gedDomain}
-                  onChange={(event) =>
-                    patchSettings({
-                      gedDomain: event.target.value === "2" ? "2" : "1",
-                    })
-                  }
+                  name="gedDomain"
+                  className="h-11 w-full rounded-md border border-zinc-500 bg-white px-3 text-sm text-zinc-900"
+                  defaultValue="1"
                 >
                   <option value="1">BrPronto</option>
                   <option value="2">NDS</option>
@@ -398,38 +386,43 @@ export function Dashboard() {
             </div>
             <div className="space-y-1 md:col-span-2">
               <Label htmlFor="groupBko">Nome do grupo BKO</Label>
-              <Input
+              <input
                 id="groupBko"
-                value={settings.groupBko}
-                onChange={(event) => patchSettings({ groupBko: event.target.value })}
+                name="groupBko"
+                type="text"
+                defaultValue="bko one urgente"
+                className="h-11 w-full rounded-md border border-zinc-500 bg-white px-3 text-base text-zinc-900"
               />
             </div>
             <div className="space-y-1 md:col-span-2">
               <Label htmlFor="groupGerentes">Nome do grupo gerentes</Label>
-              <Input
+              <input
                 id="groupGerentes"
-                value={settings.groupGerentes}
-                onChange={(event) => patchSettings({ groupGerentes: event.target.value })}
+                name="groupGerentes"
+                type="text"
+                defaultValue="gerentes one"
+                className="h-11 w-full rounded-md border border-zinc-500 bg-white px-3 text-base text-zinc-900"
               />
             </div>
             <div className="space-y-1 md:col-span-2">
               <Label htmlFor="extraCpfs">CPFs extras (opcional, um por linha)</Label>
-              <Textarea
+              <textarea
                 id="extraCpfs"
+                name="extraCpfs"
                 rows={3}
                 placeholder="Use só para testar um CPF fora do CRM"
-                value={settings.extraCpfs}
-                onChange={(event) => patchSettings({ extraCpfs: event.target.value })}
+                className="w-full rounded-md border border-zinc-500 bg-white px-3 py-2 text-base text-zinc-900"
               />
             </div>
             <div className="flex flex-wrap gap-2 md:col-span-2">
-              <Button variant="outline" disabled={saving} onClick={() => void saveSettings()}>
+              <Button type="button" variant="outline" disabled={saving} onClick={() => void saveSettings()}>
                 {saving ? "Salvando..." : "Salvar acessos"}
               </Button>
-              <Button disabled={running || !connected} onClick={() => void runNow()}>
+              <Button type="button" disabled={running || !connected} onClick={() => void runNow()}>
                 {running ? "Verificando..." : "Rodar verificação agora"}
               </Button>
             </div>
+            </form>
           </CardContent>
         </Card>
       </section>
