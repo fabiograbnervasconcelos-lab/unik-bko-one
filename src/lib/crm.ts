@@ -23,14 +23,6 @@ const CRM_LISTS = [
     label: "TIM FIBRA Pré-Venda",
     url: `${CRM_BASE}/consultarPrevendas.php?active=prevendas7&operadora=7`,
   },
-  {
-    label: "NIO Histórico",
-    url: `${CRM_BASE}/consultarHistoricos.php?active=historicos8&operadora=8`,
-  },
-  {
-    label: "TIM FIBRA Histórico",
-    url: `${CRM_BASE}/consultarHistoricos.php?active=historicos7&operadora=7`,
-  },
 ];
 
 const STATUS_QUERY: Record<CrmStatus, string> = {
@@ -193,7 +185,7 @@ export async function loginCrm(page: Page, user: string, pass: string) {
 }
 
 export async function collectCrmLeads(page: Page): Promise<CrmLead[]> {
-  setStep("Lendo Pré-Venda e Histórico (NIO e TIM FIBRA)...");
+  setStep("Lendo só Pré-Venda (NIO e TIM FIBRA)...");
   const found: CrmLead[] = [];
   const statuses: CrmStatus[] = ["aguardando biometria", "cancelado/bio expirada"];
 
