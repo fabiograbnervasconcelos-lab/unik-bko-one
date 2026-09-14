@@ -1,0 +1,127 @@
+export type WhatsAppState =
+  | "disconnected"
+  | "qr"
+  | "connecting"
+  | "connected"
+  | "error";
+
+export type JobState = "idle" | "running" | "done" | "error";
+
+export type LogLevel = "info" | "warn" | "error";
+
+export type LogLine = {
+  ts: string;
+  level: LogLevel;
+  message: string;
+};
+
+export type WhatsAppGroup = {
+  id: string;
+  name: string;
+  matched: "bko" | "gerentes" | null;
+};
+
+export type LeadResult = {
+  name: string;
+  cpf: string;
+  crmStatus: string;
+  hasDigitization: boolean;
+  gedResult: string | null;
+  notified: boolean;
+  notifyTargets: string[];
+  error?: string;
+};
+
+export type AppSnapshot = {
+  whatsapp: WhatsAppState;
+  whatsappError: string | null;
+  qrDataUrl: string | null;
+  groups: WhatsAppGroup[];
+  job: JobState;
+  jobError: string | null;
+  step: string;
+  logs: LogLine[];
+  results: LeadResult[];
+  screenshots: string[];
+  updatedAt: string;
+};
+
+const MAX_LOGS = 250;
+
+const globalForApp = globalThis as typeof globalThis & {
+  unikBkoSnapshot?: AppSnapshot;
+};
+
+const snapshot: AppSnapshot = globalForApp.unikBkoSnapshot ?? {
+  whatsapp: "disconnected",
+  whatsappError: null,
+  qrDataUrl: null,
+  groups: [],
+  job: "idle",
+  jobError: null,
+  step: "Aguardando conexão do WhatsApp.",
+  logs: [],
+  results: [],
+  screenshots: [],
+  updatedAt: new Date().toISOString(),
+};
+
+globalForApp.unikBkoSnapshot = snapshot;
+
+function touch() {
+  snapshot.updatedAt = new Date().toISOString();
+}
+
+export function getSnapshot(): AppSnapshot {
+  return snapshot;
+}
+
+export function log(level: LogLevel, message: string) {
+  snapshot.logs = [
+    ...snapshot.logs.slice(-(MAX_LOGS - 1)),
+    { ts: new Date().toISOString(), level, message },
+  ];
+  touch();
+}
+
+export function setWhatsAppState(
+  state: WhatsAppState,
+  extra: Partial<Pick<AppSnapshot, "qrDataUrl" | "whatsappError" | "groups">> = {},
+) {
+  snapshot.whatsapp = state;
+  if ("qrDataUrl" in extra) snapshot.qrDataUrl = extra.qrDataUrl ?? null;
+  if ("whatsappError" in extra) snapshot.whatsappError = extra.whatsappError ?? null;
+  if ("groups" in extra) snapshot.groups = extra.groups ?? [];
+  if (state === "connected") snapshot.qrDataUrl = null;
+  touch();
+}
+
+export function setJob(state: JobState, extra: { error?: string | null; step?: string } = {}) {
+  snapshot.job = state;
+  if ("error" in extra) snapshot.jobError = extra.error ?? null;
+  if (extra.step) snapshot.step = extra.step;
+  touch();
+}
+
+export function setStep(step: string) {
+  snapshot.step = step;
+  touch();
+}
+
+export function setResults(results: LeadResult[]) {
+  snapshot.results = results;
+  touch();
+}
+
+export function setScreenshots(files: string[]) {
+  snapshot.screenshots = files;
+  touch();
+}
+
+export function clearRun() {
+  snapshot.results = [];
+  snapshot.jobError = null;
+  snapshot.job = "idle";
+  snapshot.step = "Pronto para verificar CRM e GED360.";
+  touch();
+}
