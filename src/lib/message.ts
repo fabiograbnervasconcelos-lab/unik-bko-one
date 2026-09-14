@@ -16,5 +16,5 @@ export function buildAlertMessage(
 }
 
 export function isPendingWhatsApp(lead: LeadResult) {
-  return Boolean(lead.draftMessage) && !lead.notified && !lead.skipped;
+  return Boolean(lead.id && lead.draftMessage) && !lead.notified && !lead.skipped;
 }

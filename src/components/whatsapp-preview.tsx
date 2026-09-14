@@ -36,7 +36,7 @@ export function WhatsAppPreview({
 }) {
   const pending = results.filter(isPendingWhatsApp);
   const selectedPending = pending.filter((row) => selectedIds.has(row.id));
-  const sent = results.filter((row) => row.notified);
+  const sent = results.filter((row) => row.notified && row.draftMessage);
   const destination = destinationLabel(groups);
 
   return (
