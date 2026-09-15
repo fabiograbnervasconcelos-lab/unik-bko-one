@@ -13,27 +13,17 @@ if [[ ! -x "$CLOUDFLARED" ]]; then
   exit 1
 fi
 
-SLUG="sable-hollow-2jgv"
-CLAIM_FILE="$ROOT/.herenow/claim-$SLUG"
+SLUGS=(cozy-delta-bsqr sable-hollow-2jgv)
 
 publish_site() {
   local url="$1"
   node "$ROOT/scripts/render-here-now.mjs" "$url"
-  local claim=""
-  if [[ -f "$CLAIM_FILE" ]]; then
-    claim="$(tr -d '[:space:]' < "$CLAIM_FILE")"
-  fi
-  if [[ -z "$claim" && -f "$ROOT/.herenow/state.json" ]]; then
-    claim="$(jq -r --arg s "$SLUG" '.publishes[$s].claimToken // empty' "$ROOT/.herenow/state.json")"
-  fi
-  if [[ -z "$claim" ]]; then
-    echo "missing $SLUG claim token; skip here.now update" >&2
-    return 1
-  fi
-  mkdir -p "$ROOT/.herenow"
-  printf '%s\n' "$claim" > "$CLAIM_FILE"
-  local args=("$ROOT/here-now-site" --slug "$SLUG" --client cursor --title "Unik BKO One" --description "Painel ao vivo Unik BKO One" --claim-token "$claim")
-  "$PUBLISH" "${args[@]}" || true
+  local slug
+  for slug in "${SLUGS[@]}"; do
+    echo "publishing $slug" >&2
+    "$PUBLISH" "$ROOT/here-now-site" --slug "$slug" --client cursor \
+      --title "Unik BKO One" --description "Painel ao vivo Unik BKO One" || true
+  done
 }
 
 extract_url() {
