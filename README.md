@@ -19,7 +19,9 @@ npm install
 npm run dev
 ```
 
-Abra `http://127.0.0.1:43147`.
+Abra `http://127.0.0.1:43147` (Preview do Cursor). Esse é o endereço estável do painel.
+
+Não use `*.trycloudflare.com`: o DNS some quando o túnel cai.
 
 1. Escaneie o QR com o WhatsApp da operação.
 2. Preencha usuário/senha do CRM e do GED360 (domínio BrPronto por padrão).

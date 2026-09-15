@@ -3,17 +3,37 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Unik BKO One — CRM × GED360</title>
+    <title>Unik BKO One — painel</title>
     <style>
-      html, body { margin: 0; height: 100%; background: #171717; }
-      iframe { border: 0; width: 100%; height: 100%; display: block; }
+      :root { --bg: #171717; --fg: #fafafa; --muted: #a1a1aa; --amber: #fbbf24; --card: #262626; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; font-family: ui-sans-serif, system-ui, sans-serif;
+        background: var(--bg); color: var(--fg); display: grid; place-items: center; padding: 24px;
+      }
+      main { max-width: 36rem; }
+      .kicker { color: var(--amber); letter-spacing: 0.2em; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+      h1 { font-size: 1.75rem; letter-spacing: -0.03em; margin: 8px 0 12px; }
+      p { color: var(--muted); line-height: 1.55; }
+      .card { background: var(--card); border-radius: 16px; padding: 16px 18px; margin-top: 20px; }
+      code { color: var(--fg); font-size: 0.95em; }
     </style>
   </head>
   <body>
-    <iframe
-      src="https://automotive-quit-boxed-power.trycloudflare.com/"
-      title="Unik BKO One"
-      allow="clipboard-write"
-    ></iframe>
+    <main>
+      <p class="kicker">Unik Telecom · BKO One</p>
+      <h1>O painel não usa mais trycloudflare</h1>
+      <p>
+        Endereços <code>*.trycloudflare.com</code> caem sozinhos e o DNS some.
+        Por isso o painel de verdade fica no Preview do Cursor, sempre em
+        <code>http://127.0.0.1:43147</code> — Salvar acessos, GED e WhatsApp
+        rodam aí, sem túnel.
+      </p>
+      <div class="card">
+        <p style="margin:0;color:var(--fg)">
+          Abra o Preview neste agente. Não use links trycloudflare antigos.
+        </p>
+      </div>
+    </main>
   </body>
 </html>

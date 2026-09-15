@@ -1,0 +1,18 @@
+{
+  "name": "Unik BKO One",
+  "install": "npm install",
+  "chromeExecutablePath": "/usr/local/bin/google-chrome",
+  "terminals": [
+    {
+      "name": "painel",
+      "command": "npm run dev",
+      "description": "Painel em http://127.0.0.1:43147. Não publicar túnel trycloudflare."
+    }
+  ],
+  "ports": [
+    {
+      "name": "painel",
+      "port": 43147
+    }
+  ]
+}
