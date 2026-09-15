@@ -19,9 +19,9 @@ npm install
 npm run dev
 ```
 
-Abra `http://127.0.0.1:43147` (Preview do Cursor). Esse é o endereço estável do painel.
+Abra `http://127.0.0.1:43147` (Preview do Cursor) ou a página here.now que embute o túnel, enquanto este servidor estiver ligado.
 
-Não use `*.trycloudflare.com`: o DNS some quando o túnel cai.
+O here.now sozinho não executa CRM/GED/WhatsApp. O script `scripts/keep-tunnel.sh` abre um túnel até a porta 43147 e republica o iframe.
 
 1. Escaneie o QR com o WhatsApp da operação.
 2. Preencha usuário/senha do CRM e do GED360 (domínio BrPronto por padrão).

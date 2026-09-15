@@ -1,4 +1,15 @@
-<!DOCTYPE html>
+#!/usr/bin/env node
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const tunnel = (process.argv[2] || "").replace(/\/$/, "");
+if (!/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(tunnel)) {
+  console.error("usage: render-here-now.mjs https://xxxx.trycloudflare.com");
+  process.exit(1);
+}
+
+const html = `<!DOCTYPE html>
 <html lang="pt-BR">
   <head>
     <meta charset="utf-8" />
@@ -18,12 +29,19 @@
   <body>
     <div class="bar">
       <span>Unik BKO One · painel ao vivo nesta página</span>
-      <a href="https://edgar-talent-tackle-knee.trycloudflare.com/" target="_top" rel="noreferrer">abrir direto</a>
+      <a href="${tunnel}/" target="_top" rel="noreferrer">abrir direto</a>
     </div>
     <iframe
-      src="https://edgar-talent-tackle-knee.trycloudflare.com/"
+      src="${tunnel}/"
       title="Unik BKO One"
       allow="clipboard-write"
     ></iframe>
   </body>
 </html>
+`;
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const out = join(root, "here-now-site", "index.html");
+mkdirSync(dirname(out), { recursive: true });
+writeFileSync(out, html);
+console.log(out);

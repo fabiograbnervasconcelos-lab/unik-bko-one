@@ -6,7 +6,12 @@
     {
       "name": "painel",
       "command": "npm run dev",
-      "description": "Painel em http://127.0.0.1:43147. Não publicar túnel trycloudflare."
+      "description": "Painel em http://127.0.0.1:43147."
+    },
+    {
+      "name": "tunel",
+      "command": "bash scripts/keep-tunnel.sh",
+      "description": "Túnel Cloudflare para o here.now com o painel ao vivo."
     }
   ],
   "ports": [
