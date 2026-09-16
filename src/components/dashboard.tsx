@@ -295,8 +295,9 @@ export function Dashboard() {
 
   return (
     <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 py-6 md:px-8">
-      <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div className="space-y-1">
+      <header className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="max-w-3xl space-y-1">
           <p className="text-xs font-semibold tracking-[0.2em] text-amber-400 uppercase">
             Unik Telecom · BKO One
           </p>
@@ -312,7 +313,7 @@ export function Dashboard() {
             nesse número. Se o GED não achar nada, não monta mensagem.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 lg:max-w-sm lg:justify-end">
           <Badge variant={connected ? "default" : "secondary"}>
             WhatsApp: {waLabel(snapshot?.whatsapp ?? "disconnected")}
           </Badge>
@@ -322,6 +323,7 @@ export function Dashboard() {
           ) : (
             <Badge variant="secondary">Leitura automática a cada 1 hora</Badge>
           )}
+        </div>
         </div>
       </header>
 
