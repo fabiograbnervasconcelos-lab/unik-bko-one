@@ -17,7 +17,7 @@ const nextConfig: NextConfig = {
           {
             key: "Content-Security-Policy",
             value:
-              "frame-ancestors 'self' https://cozy-delta-bsqr.here.now https://sable-hollow-2jgv.here.now https://*.here.now https://here.now",
+              "frame-ancestors 'self' https://cozy-delta-bsqr.here.now https://sable-hollow-2jgv.here.now https://*.here.now https://here.now https://*.up.railway.app https://*.railway.app https://*.onrender.com",
           },
         ],
       },

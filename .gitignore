@@ -44,6 +44,9 @@ yarn-error.log*
 # here.now local publish state
 .herenow/
 
+# hosting CLIs
+.railway/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

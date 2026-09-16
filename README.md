@@ -23,6 +23,16 @@ Abra `http://127.0.0.1:43147` (Preview do Cursor) ou a página here.now que embu
 
 O here.now sozinho não executa CRM/GED/WhatsApp. O script `scripts/keep-tunnel.sh` abre um túnel até a porta 43147 e republica o iframe.
 
+## Railway, Render e here.now
+
+O painel precisa de Chrome/Playwright, WhatsApp sempre ligado e disco para a sessão. Por isso o deploy usa Docker (`Dockerfile`), não Vercel.
+
+- **here.now:** https://cozy-delta-bsqr.here.now/ — página permanente; o robô só roda se o túnel/servidor estiver no ar.
+- **Railway:** `railway up -y --name unik-bko-one` (sobe o Dockerfile e gera `*.up.railway.app`). Monte um volume em `/app/data` para não perder o WhatsApp.
+- **Render:** Blueprint em `render.yaml` (Docker + disco em `/app/data`). O Render precisa de um repositório Git ou de uma imagem Docker.
+
+Produção escuta `PORT` (`npm start` → `scripts/start.mjs`). Health check: `GET /api/health`.
+
 1. Escaneie o QR com o WhatsApp da operação.
 2. Preencha usuário/senha do CRM e do GED360 (domínio BrPronto por padrão).
 3. Confira se os dois grupos apareceram com o selo certo.
