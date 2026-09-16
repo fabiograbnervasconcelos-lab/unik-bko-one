@@ -14,6 +14,7 @@ const html = `<!DOCTYPE html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <title>Unik BKO One — painel ao vivo</title>
     <style>
       html, body { margin: 0; height: 100%; background: #171717; color: #fafafa; font-family: ui-sans-serif, system-ui, sans-serif; }
@@ -28,7 +29,7 @@ const html = `<!DOCTYPE html>
   </head>
   <body>
     <div class="bar">
-      <span>Unik BKO One · painel ao vivo nesta página</span>
+      <span id="st">Unik BKO One · painel ao vivo nesta página</span>
       <a href="${tunnel}/" target="_top" rel="noreferrer">abrir direto</a>
     </div>
     <iframe
@@ -36,12 +37,50 @@ const html = `<!DOCTYPE html>
       title="Unik BKO One"
       allow="clipboard-write"
     ></iframe>
+    <script>
+      const tunnel = ${JSON.stringify(tunnel)};
+      let fails = 0;
+      let reloading = false;
+      async function ping() {
+        if (reloading) return;
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
+        try {
+          const response = await fetch(tunnel + "/api/health?t=" + Date.now(), {
+            cache: "no-store",
+            mode: "cors",
+            signal: ctrl.signal,
+          });
+          if (!response.ok) throw new Error("health");
+          fails = 0;
+          document.getElementById("st").textContent = "Unik BKO One · painel ao vivo nesta página";
+        } catch (error) {
+          fails += 1;
+          document.getElementById("st").textContent =
+            "Túnel caiu. Renovando o endereço — a página recarrega sozinha em instantes.";
+          if (fails >= 2 && !reloading) {
+            reloading = true;
+            setTimeout(function () {
+              location.replace("/?r=" + Date.now());
+            }, 25000);
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      ping();
+      setInterval(ping, 15000);
+    </script>
   </body>
 </html>
 `;
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const out = join(root, "here-now-site", "index.html");
-mkdirSync(dirname(out), { recursive: true });
-writeFileSync(out, html);
-console.log(out);
+const outDir = join(root, "here-now-site");
+mkdirSync(outDir, { recursive: true });
+writeFileSync(join(outDir, "index.html"), html);
+writeFileSync(
+  join(outDir, "current.json"),
+  JSON.stringify({ tunnel, updatedAt: new Date().toISOString() }, null, 2) + "\n",
+);
+console.log(join(outDir, "index.html"));

@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <title>Unik BKO One — painel ao vivo</title>
     <style>
       html, body { margin: 0; height: 100%; background: #171717; color: #fafafa; font-family: ui-sans-serif, system-ui, sans-serif; }
@@ -17,13 +18,47 @@
   </head>
   <body>
     <div class="bar">
-      <span>Unik BKO One · painel ao vivo nesta página</span>
-      <a href="https://edgar-talent-tackle-knee.trycloudflare.com/" target="_top" rel="noreferrer">abrir direto</a>
+      <span id="st">Unik BKO One · painel ao vivo nesta página</span>
+      <a href="https://connectors-asthma-strips-competing.trycloudflare.com/" target="_top" rel="noreferrer">abrir direto</a>
     </div>
     <iframe
-      src="https://edgar-talent-tackle-knee.trycloudflare.com/"
+      src="https://connectors-asthma-strips-competing.trycloudflare.com/"
       title="Unik BKO One"
       allow="clipboard-write"
     ></iframe>
+    <script>
+      const tunnel = "https://connectors-asthma-strips-competing.trycloudflare.com";
+      let fails = 0;
+      let reloading = false;
+      async function ping() {
+        if (reloading) return;
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
+        try {
+          const response = await fetch(tunnel + "/api/health?t=" + Date.now(), {
+            cache: "no-store",
+            mode: "cors",
+            signal: ctrl.signal,
+          });
+          if (!response.ok) throw new Error("health");
+          fails = 0;
+          document.getElementById("st").textContent = "Unik BKO One · painel ao vivo nesta página";
+        } catch (error) {
+          fails += 1;
+          document.getElementById("st").textContent =
+            "Túnel caiu. Renovando o endereço — a página recarrega sozinha em instantes.";
+          if (fails >= 2 && !reloading) {
+            reloading = true;
+            setTimeout(function () {
+              location.replace("/?r=" + Date.now());
+            }, 25000);
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      ping();
+      setInterval(ping, 15000);
+    </script>
   </body>
 </html>
