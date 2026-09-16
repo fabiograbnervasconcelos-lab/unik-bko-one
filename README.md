@@ -29,7 +29,7 @@ O painel precisa de Chrome/Playwright, WhatsApp sempre ligado e disco para a ses
 
 - **here.now:** https://cozy-delta-bsqr.here.now/ — página permanente; o robô só roda se o túnel/servidor estiver no ar.
 - **Railway:** https://unik-bko-one-production.up.railway.app/ — Docker + volume em `/app/data`.
-- **Render:** Blueprint em `render.yaml`. Precisa de um repositório GitHub (ou imagem Docker) conectado à conta.
+- **Render:** https://unik-bko-one.onrender.com/ — Docker no plano free (sem disco persistente; a instância dorme quando fica ociosa).
 
 Produção escuta `PORT` (`npm start` → `scripts/start.mjs`). Health check: `GET /api/health`.
 

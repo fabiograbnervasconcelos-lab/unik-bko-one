@@ -33,6 +33,8 @@ const html = `<!DOCTYPE html>
       <span>
         <a href="https://unik-bko-one-production.up.railway.app/" target="_blank" rel="noreferrer">Railway</a>
         ·
+        <a href="https://unik-bko-one.onrender.com/" target="_blank" rel="noreferrer">Render</a>
+        ·
         <a href="${tunnel}/" target="_top" rel="noreferrer">abrir túnel</a>
       </span>
     </div>
