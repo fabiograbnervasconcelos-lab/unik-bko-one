@@ -30,7 +30,11 @@ const html = `<!DOCTYPE html>
   <body>
     <div class="bar">
       <span id="st">Unik BKO One · painel ao vivo nesta página</span>
-      <a href="${tunnel}/" target="_top" rel="noreferrer">abrir direto</a>
+      <span>
+        <a href="https://unik-bko-one-production.up.railway.app/" target="_blank" rel="noreferrer">Railway</a>
+        ·
+        <a href="${tunnel}/" target="_top" rel="noreferrer">abrir túnel</a>
+      </span>
     </div>
     <iframe
       src="${tunnel}/"

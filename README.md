@@ -28,8 +28,8 @@ O here.now sozinho não executa CRM/GED/WhatsApp. O script `scripts/keep-tunnel.
 O painel precisa de Chrome/Playwright, WhatsApp sempre ligado e disco para a sessão. Por isso o deploy usa Docker (`Dockerfile`), não Vercel.
 
 - **here.now:** https://cozy-delta-bsqr.here.now/ — página permanente; o robô só roda se o túnel/servidor estiver no ar.
-- **Railway:** `railway up -y --name unik-bko-one` (sobe o Dockerfile e gera `*.up.railway.app`). Monte um volume em `/app/data` para não perder o WhatsApp.
-- **Render:** Blueprint em `render.yaml` (Docker + disco em `/app/data`). O Render precisa de um repositório Git ou de uma imagem Docker.
+- **Railway:** https://unik-bko-one-production.up.railway.app/ — Docker + volume em `/app/data`.
+- **Render:** Blueprint em `render.yaml`. Precisa de um repositório GitHub (ou imagem Docker) conectado à conta.
 
 Produção escuta `PORT` (`npm start` → `scripts/start.mjs`). Health check: `GET /api/health`.
 
