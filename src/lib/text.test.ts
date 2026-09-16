@@ -65,6 +65,58 @@ test("aceita o valor na linha de baixo do rótulo", () => {
   assert.equal(extractGedAnalysis(stacked), "Doc. Apto para Venda");
 });
 
+test("não pega Regional quando rótulos e valores estão em colunas separadas", () => {
+  const columns = `
+Nº da O.S
+ID GPON/Acesso
+Nº ID Bundle
+Nº do IMEI
+Data de Digitalização
+Data de Envio da Digitalização
+Data de Conferência
+Login
+Código PDV
+Razão Social
+Tipo de Serviço
+Opções de Apoio
+Nome do Plano
+Resultado da Análise
+Status da Digitalização
+Local de Digitalização
+Linha(s)
+Regional
+-
+-
+-
+-
+14/09/2026 20:26:16
+14/09/2026 20:26:16
+14/09/2026 20:26:22
+TT635008
+1069022
+ONE TELECOM LTDA
+BIOMETRIA
+-
+-
+Doc. Apto para Venda
+Conferido
+PDV
+(41)96750-8745
+RSUL
+`;
+  assert.equal(extractGedAnalysis(columns), "Doc. Apto para Venda");
+});
+
+test("não pega Regional se ele vier na linha seguinte ao rótulo (coluna da esquerda)", () => {
+  const leftColumn = `
+Resultado da Análise
+Regional
+Doc. Apto para Venda
+RSUL
+`;
+  assert.equal(extractGedAnalysis(leftColumn), "Doc. Apto para Venda");
+});
+
 test("não trata Regional / RSUL / Conferido como resultado", () => {
   assert.equal(isJunkGedAnalysis("Regional"), true);
   assert.equal(isJunkGedAnalysis("Regional RSUL"), true);

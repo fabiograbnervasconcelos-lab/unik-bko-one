@@ -7,9 +7,8 @@ import { isPendingWhatsApp } from "@/lib/message";
 
 function destinationLabel(groups: WhatsAppGroup[]) {
   const names = groups.filter((group) => group.matched).map((group) => group.name);
-  const personal = "WhatsApp 48 99194-0908";
-  if (names.length) return `${personal} · ${names.join(" · ")}`;
-  return `${personal} · BKO One Urgente · Gerentes One`;
+  const dest = names.length ? names.join(" · ") : "BKO One Urgente · Gerentes One";
+  return `${dest} · validação 48 99194-0908`;
 }
 
 export function WhatsAppPreview({

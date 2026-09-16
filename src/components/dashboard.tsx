@@ -97,6 +97,7 @@ export function Dashboard() {
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [qrTick, setQrTick] = useState(0);
   const [qrFailed, setQrFailed] = useState(false);
@@ -255,6 +256,29 @@ export function Dashboard() {
     }
   }
 
+  async function resetCrmGed() {
+    if (
+      !window.confirm(
+        "Zerar a consulta e deslogar CRM e GED360? O WhatsApp permanece conectado.",
+      )
+    ) {
+      return;
+    }
+    setResetting(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/reset", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Não foi possível zerar.");
+      setNotice(data.step || "Zerado. WhatsApp continua conectado.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setResetting(false);
+      void refresh();
+    }
+  }
+
   const groups: WhatsAppGroup[] = snapshot?.groups ?? [];
   const logs = useMemo(() => [...(snapshot?.logs ?? [])].reverse(), [snapshot?.logs]);
   const connected = snapshot?.whatsapp === "connected";
@@ -308,9 +332,11 @@ export function Dashboard() {
             Lê no CRM quem está em <strong>cancelado/bio expirada</strong> ou{" "}
             <strong>aguardando biometria</strong>, consulta o CPF no GED360 e copia o{" "}
             <strong>Resultado da Análise</strong> da ficha (não o rodapé Regional). De
-            hora em hora o painel lê sozinho e avisa no WhatsApp <strong>48 99194-0908</strong>
-            e nos grupos. Também dispara se você mandar <strong>validar e enviar</strong>{" "}
-            nesse número. Se o GED não achar nada, não monta mensagem.
+            hora em hora o painel lê sozinho e avisa nos grupos{" "}
+            <strong>BKO One Urgente</strong> e <strong>Gerentes One</strong>. Uma cópia
+            de validação vai para o WhatsApp <strong>48 99194-0908</strong>. Também dispara
+            se você mandar <strong>validar e enviar</strong> nesse número. Se o GED não
+            achar nada, não monta mensagem.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 lg:max-w-sm lg:justify-end">
@@ -528,6 +554,14 @@ export function Dashboard() {
               >
                 Parar envio
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={resetting}
+                onClick={() => void resetCrmGed()}
+              >
+                {resetting ? "Zerando..." : "Zerar CRM e GED"}
+              </Button>
             </div>
             </form>
           </CardContent>
@@ -539,10 +573,10 @@ export function Dashboard() {
           <CardHeader>
             <CardTitle>3. Conferir e enviar no WhatsApp</CardTitle>
             <CardDescription>
-              Cada balão é o texto que vai para o seu WhatsApp e para os grupos. Marque
-              o que vale e clique em validar e enviar — ou mande essa frase no WhatsApp
-              do 48 99194-0908. A leitura de hora em hora envia sozinha. Sem status no
-              GED, não aparece nada aqui.
+              Cada balão é o texto que vai para os grupos BKO e Gerentes. Uma cópia
+              chega no 48 99194-0908 só para você validar o envio. Marque o que vale e
+              clique em validar e enviar — ou mande essa frase no WhatsApp. A leitura de
+              hora em hora envia sozinha. Sem status no GED, não aparece nada aqui.
             </CardDescription>
           </CardHeader>
           <CardContent>

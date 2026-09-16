@@ -44,3 +44,7 @@ export function markAlertSent(cpf: string, result: string) {
   rows.push({ cpf: onlyDigits(cpf), result, sentAt: new Date().toISOString() });
   saveAll(rows);
 }
+
+export function clearSentAlerts() {
+  saveAll([]);
+}

@@ -5,6 +5,7 @@ import {
   cleanGedAnalysisValue,
   extractGedAnalysis,
   formatCpf,
+  isJunkGedAnalysis,
   looksLikeEmptyGed,
   onlyDigits,
 } from "@/lib/text";
@@ -139,6 +140,24 @@ async function readGedStatusFromDom(page: Page): Promise<string | null> {
           return aa.width * aa.height - bb.width * bb.height;
         });
 
+      const fromPoint = (el: Element): string | null => {
+        const rect = el.getBoundingClientRect();
+        if (!rect.width && !rect.height) return null;
+        const ys = [rect.top + rect.height / 2, rect.top + 8, rect.bottom - 8];
+        const xs = [24, 48, 90, 140, 200, 280, 360];
+        for (const y of ys) {
+          for (const dx of xs) {
+            const hits = document.elementsFromPoint(rect.right + dx, y);
+            for (const hit of hits) {
+              if (hit === el || el.contains(hit)) continue;
+              const v = accept(hit.textContent || "");
+              if (v) return v;
+            }
+          }
+        }
+        return null;
+      };
+
       const fromSameRow = (el: Element): string | null => {
         const rect = el.getBoundingClientRect();
         if (!rect.width && !rect.height) return null;
@@ -205,7 +224,7 @@ async function readGedStatusFromDom(page: Page): Promise<string | null> {
       };
 
       for (const el of labelEls) {
-        const found = fromSameRow(el) || fromStructure(el);
+        const found = fromPoint(el) || fromSameRow(el) || fromStructure(el);
         if (found) return found;
       }
 
@@ -242,9 +261,10 @@ export async function lookupGedCpf(page: Page, cpf: string): Promise<GedLookup> 
   }
 
   const empty = looksLikeEmptyGed(text);
-  const fromDom = empty ? null : cleanGedAnalysisValue((await readGedStatusFromDom(page)) ?? "");
   const fromText = empty ? null : extractGedAnalysis(text);
-  const result = fromDom || fromText;
+  const fromDom = empty ? null : cleanGedAnalysisValue((await readGedStatusFromDom(page)) ?? "");
+  const result =
+    [fromText, fromDom].find((value) => Boolean(value) && !isJunkGedAnalysis(value ?? "")) ?? null;
   const hasDigitization = Boolean(result);
   if (!result) {
     log("info", `GED ${formatCpf(cpf)}: sem Resultado da Análise — permanece o status do CRM.`);

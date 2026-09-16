@@ -6,6 +6,7 @@ import { markAlertSent, wasAlertSent } from "@/lib/sent-log";
 import { loadSettings } from "@/lib/settings";
 import {
   getSnapshot,
+  getRunEpoch,
   log,
   setHourlyNote,
   setJob,
@@ -115,11 +116,12 @@ async function executePipeline(
   options: { autoSend: boolean; source: PipelineSource },
 ) {
   const { autoSend, source } = options;
+  const epoch = getRunEpoch();
   setResults([]);
   log(
     "info",
     source === "hourly"
-      ? "Leitura automática: CRM → GED360 → WhatsApp no 48 99194-0908."
+      ? "Leitura automática: CRM → GED360 → grupos WhatsApp + cópia de validação no 48 99194-0908."
       : "Verificação iniciada: CRM → GED360. WhatsApp só depois de validar na tela ou pelo comando.",
   );
 
@@ -161,7 +163,7 @@ async function executePipeline(
     await loginGed(gedPage, settings.gedUser, settings.gedPass, settings.gedDomain);
 
     for (const [index, lead] of leads.entries()) {
-      if (isStopRequested()) {
+      if (getRunEpoch() !== epoch || isStopRequested()) {
         finishScan(results, true, autoSend);
         return getSnapshot();
       }
@@ -207,6 +209,11 @@ async function executePipeline(
         setResults([...results]);
         log("error", `Falha no CPF ${lead.cpf}: ${message}`);
       }
+    }
+
+    if (getRunEpoch() !== epoch) {
+      log("warn", "Consulta descartada: painel foi zerado.");
+      return getSnapshot();
     }
 
     const pending = finishScan(results, false, autoSend);

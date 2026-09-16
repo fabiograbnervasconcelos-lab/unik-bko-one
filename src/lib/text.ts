@@ -56,6 +56,75 @@ const EMPTY_GED_HINT =
 export const GED_VALUE_STOP =
   /(?:status da digitaliza(?:ção|cao)?|local de digitaliza(?:ção|cao)?|linha\(?s?\)?\s*:|^\s*linha\(?s?\)?|\bregional\b|\bprotocolo\b|\bvisualizar\b|\bfiltrar\b)/i;
 
+const GED_CARD_LABELS: { key: string; re: RegExp }[] = [
+  { key: "os", re: /n[oº°]\s*(?:da\s*)?o\.?\s*s\.?/i },
+  { key: "gpon", re: /id\s*gpon\s*\/?\s*acesso/i },
+  { key: "bundle", re: /n[oº°]?\s*id\s*bundle/i },
+  { key: "imei", re: /n[oº°]?\s*(?:do\s*)?imei/i },
+  { key: "dataEnvio", re: /data de envio da digitaliza(?:ção|cao)?/i },
+  { key: "dataDig", re: /data de digitaliza(?:ção|cao)?/i },
+  { key: "dataConf", re: /data de confer(?:ência|encia)?/i },
+  { key: "login", re: /(?<![a-zà-ú])login(?![a-zà-ú])/i },
+  { key: "pdv", re: /c[oó]digo pdv/i },
+  { key: "razao", re: /raz[aã]o social/i },
+  { key: "tipo", re: /tipo de servi[cç]o/i },
+  { key: "apoio", re: /op[cç][oõ]es de apoio/i },
+  { key: "plano", re: /nome do plano/i },
+  { key: "resultado", re: /resultado da an[aá]lise/i },
+  { key: "statusDig", re: /status da digitaliza(?:ção|cao)?/i },
+  { key: "local", re: /local de digitaliza(?:ção|cao)?/i },
+  { key: "linha", re: /linha\(?s?\)?/i },
+  { key: "regional", re: /(?<![a-zà-ú])regional(?![a-zà-ú])/i },
+];
+
+function classifyGedLine(line: string): { kind: "pair"; key: string; value: string } | { kind: "label"; key: string } | { kind: "value"; text: string } {
+  const trimmed = line.replace(/\s+/g, " ").trim();
+  for (const spec of GED_CARD_LABELS) {
+    const re = new RegExp(`^(?:${spec.re.source})\\s*[:\\-–—]?\\s*(.*)$`, spec.re.flags);
+    const match = trimmed.match(re);
+    if (!match) continue;
+    const rest = (match.at(-1) ?? "").trim();
+    if (!rest) return { kind: "label", key: spec.key };
+    const restIsLabel = GED_CARD_LABELS.some((other) => {
+      const only = new RegExp(`^(?:${other.re.source})\\s*:?\\s*$`, other.re.flags);
+      return only.test(rest);
+    });
+    if (restIsLabel) return { kind: "label", key: spec.key };
+    return { kind: "pair", key: spec.key, value: rest };
+  }
+  return { kind: "value", text: trimmed };
+}
+
+/** Monta o cartão do GED mesmo quando rótulos e valores vêm em colunas separadas. */
+export function parseGedCard(pageText: string): Record<string, string> {
+  const lines = pageText
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const kinds = lines.map(classifyGedLine);
+  const fields: Record<string, string> = {};
+  for (const kind of kinds) {
+    if (kind.kind === "pair") fields[kind.key] = kind.value;
+  }
+
+  const labelKeys = kinds
+    .filter((kind): kind is { kind: "label"; key: string } => kind.kind === "label")
+    .map((kind) => kind.key);
+  const orphanValues = kinds
+    .filter((kind): kind is { kind: "value"; text: string } => kind.kind === "value")
+    .map((kind) => kind.text);
+
+  if (labelKeys.length && orphanValues.length) {
+    for (const [index, key] of labelKeys.entries()) {
+      const current = fields[key];
+      if (current && current !== "-" && !isJunkGedAnalysis(current)) continue;
+      const next = orphanValues[index];
+      if (next) fields[key] = next;
+    }
+  }
+  return fields;
+}
+
 const JUNK_GED_VALUE =
   /^(regional|rsul|rnul|r[ns]ul|pdv|linha|linhas?|status|analise|an[aá]lise|conferido|resultado|-|–|—)$/i;
 
@@ -90,6 +159,9 @@ export function cleanGedAnalysisValue(raw: string): string | null {
 
 /** Pega o texto que aparece em Resultado da Análise na tela do GED, mesmo se a linha sobe ou desce. */
 export function extractGedAnalysis(pageText: string): string | null {
+  const fromCard = cleanGedAnalysisValue(parseGedCard(pageText).resultado ?? "");
+  if (fromCard) return fromCard;
+
   const patterns = [
     /resultado da an[aá]lise\s*[:\-–—]?\s*([^\n\r|]{1,160})/gi,
     /status da an[aá]lise\s*[:\-–—]?\s*([^\n\r|]{1,160})/gi,
@@ -108,6 +180,12 @@ export function extractGedAnalysis(pageText: string): string | null {
   let match: RegExpExecArray | null;
   while ((match = nextLine.exec(pageText))) {
     const cleaned = cleanGedAnalysisValue(match[1] ?? "");
+    if (cleaned) return cleaned;
+  }
+
+  const apto = pageText.match(/doc\.?\s*(?:n[aã]o\s+)?apto[^,\n|]{0,40}/i);
+  if (apto?.[0]) {
+    const cleaned = cleanGedAnalysisValue(apto[0]);
     if (cleaned) return cleaned;
   }
   return null;

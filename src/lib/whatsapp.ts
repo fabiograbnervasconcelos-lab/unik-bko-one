@@ -10,7 +10,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import QRCode from "qrcode";
 import pino from "pino";
-import { defaultOwnerJid, isOwnerDirectChat } from "@/lib/owner";
+import { defaultOwnerJid, isOwnerDirectChat, ownerDigits } from "@/lib/owner";
 import { DATA_DIR, ensureDataDirs, WHATSAPP_AUTH_DIR } from "@/lib/paths";
 import { loadSettings } from "@/lib/settings";
 import { getSnapshot, log, setOwnerJid, setWhatsAppState } from "@/lib/store";
@@ -245,10 +245,12 @@ export async function connectWhatsApp() {
       if (connection === "open") {
         runtime.qrPng = null;
         setWhatsAppState("connected", { qrDataUrl: null, whatsappError: null });
-        log("info", "WhatsApp conectado. Avisos no 48 99194-0908 e comando validar e enviar ativos.");
+        const me = runtime.socket?.user?.id ?? "sessão";
+        log("info", `WhatsApp conectado como ${me}. Avisos nos grupos + cópia de validação no 48 99194-0908.`);
         await refreshGroups().catch((error) => {
           log("warn", `Não consegui listar os grupos: ${String(error)}`);
         });
+        await resolveOwnerSendJids().catch(() => undefined);
       }
       if (connection === "close") {
         const statusCode = (lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)
@@ -332,6 +334,46 @@ export async function disconnectWhatsApp() {
   setWhatsAppState("disconnected", { qrDataUrl: null, groups: [] });
 }
 
+async function resolveOwnerSendJids() {
+  const digits = ownerDigits();
+  const list: string[] = [];
+  const saved = resolveOwnerJid();
+  if (saved) list.push(saved);
+  if (runtime.socket) {
+    try {
+      const found = await runtime.socket.onWhatsApp(digits);
+      for (const row of found ?? []) {
+        if (row.exists && row.jid) {
+          list.push(row.jid);
+          persistOwnerJid(row.jid);
+          log("info", `Número 48 99194-0908 encontrado no WhatsApp: ${row.jid}`);
+        }
+      }
+    } catch (error) {
+      log("warn", `Não confirmei o 48 99194-0908 no WhatsApp: ${String(error)}`);
+    }
+  }
+  list.push(`${digits}@s.whatsapp.net`);
+  return Array.from(new Set(list));
+}
+
+async function sendValidationCopy(text: string) {
+  if (!runtime.socket) return null;
+  const errors: string[] = [];
+  for (const jid of await resolveOwnerSendJids()) {
+    try {
+      await runtime.socket.sendMessage(jid, { text });
+      persistOwnerJid(jid);
+      log("info", `Cópia de validação enviada para 48 99194-0908 (${jid}).`);
+      return jid;
+    } catch (error) {
+      errors.push(`${jid}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  log("error", `Cópia de validação não chegou no 48 99194-0908. ${errors.join(" | ")}`);
+  return null;
+}
+
 export async function sendWhatsAppText(text: string, targets: WhatsAppTarget[]) {
   if (!runtime.socket || getSnapshot().whatsapp !== "connected") {
     throw new Error("WhatsApp ainda não está conectado. Escaneie o QR.");
@@ -343,25 +385,29 @@ export async function sendWhatsAppText(text: string, targets: WhatsAppTarget[]) 
       : await refreshGroups()
     : getSnapshot().groups;
   const sentTo: string[] = [];
-  for (const target of unique) {
-    if (target === "owner") {
-      const jid = resolveOwnerJid();
-      await runtime.socket.sendMessage(jid, { text });
-      sentTo.push("WhatsApp pessoal (48 99194-0908)");
-      log("info", `WhatsApp enviado para o número pessoal ${jid}.`);
-      continue;
-    }
+
+  for (const target of unique.filter((item) => item !== "owner")) {
     const group = groups.find((item) => item.matched === target);
     if (!group) {
       log("error", `Grupo ${target} não encontrado na lista do WhatsApp.`);
       continue;
     }
-    await runtime.socket.sendMessage(group.id, { text });
-    sentTo.push(group.name);
-    log("info", `WhatsApp enviado para ${group.name}.`);
+    try {
+      await runtime.socket.sendMessage(group.id, { text });
+      sentTo.push(group.name);
+      log("info", `WhatsApp enviado para o grupo ${group.name}.`);
+    } catch (error) {
+      log("error", `Falha ao enviar para o grupo ${group.name}: ${String(error)}`);
+    }
   }
+
+  if (unique.includes("owner")) {
+    const ok = await sendValidationCopy(text);
+    if (ok) sentTo.push("WhatsApp pessoal (validação 48 99194-0908)");
+  }
+
   if (!sentTo.length) {
-    throw new Error("Não achei destino no WhatsApp (número pessoal ou grupos BKO/Gerentes).");
+    throw new Error("Não achei destino no WhatsApp (grupos BKO/Gerentes ou 48 99194-0908).");
   }
   return sentTo;
 }

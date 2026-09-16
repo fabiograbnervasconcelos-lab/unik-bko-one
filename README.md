@@ -9,8 +9,9 @@ O sistema:
 3. Filtra quem está em **cancelado/bio expirada** e **aguardando biometria**.
 4. Entra no [GED360 BrProntoPDV](https://ged360.niointernet.com.br/brprontopdv/autenticacao/index), aceita cookies e abre a ficha do CPF.
 5. Copia o **Resultado da Análise** da linha da ficha (ex.: `Doc. Apto para Venda`), mesmo quando essa linha sobe ou desce. Não usa o rodapé Regional.
-6. De **hora em hora** lê sozinho e manda aviso no WhatsApp **48 99194-0908** e nos grupos **BKO One Urgente** e **Gerentes One**.
+6. De **hora em hora** lê sozinho e manda aviso nos grupos **BKO One Urgente** e **Gerentes One**. Uma cópia de validação vai para o WhatsApp **48 99194-0908**.
 7. O botão **Validar e enviar** do painel continua valendo. O mesmo comando no WhatsApp (`validar e enviar`, enviado do 48 99194-0908) dispara a fila ou uma consulta nova.
+8. **Zerar CRM e GED** limpa a consulta, os prints e desloga os dois sistemas. **Não desconecta o WhatsApp.**
 
 Se o GED não mostrar Resultado da Análise, **não monta mensagem**.
 

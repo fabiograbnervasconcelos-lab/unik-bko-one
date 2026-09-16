@@ -51,6 +51,7 @@ export type AppSnapshot = {
   lastHourlyAt: string | null;
   hourlyNote: string | null;
   ownerJid: string | null;
+  runEpoch: number;
 };
 
 const MAX_LOGS = 250;
@@ -75,6 +76,7 @@ const snapshot: AppSnapshot = globalForApp.unikBkoSnapshot ?? {
   lastHourlyAt: null,
   hourlyNote: null,
   ownerJid: null,
+  runEpoch: 0,
 };
 
 globalForApp.unikBkoSnapshot = snapshot;
@@ -157,6 +159,23 @@ export function clearRun() {
   snapshot.job = "idle";
   snapshot.stopRequested = false;
   snapshot.step = "Pronto para verificar CRM e GED360.";
+  touch();
+}
+
+export function getRunEpoch() {
+  return snapshot.runEpoch;
+}
+
+/** Zera consulta, logs e prints. Não mexe no WhatsApp. */
+export function resetPanelKeepWhatsApp() {
+  snapshot.runEpoch += 1;
+  snapshot.stopRequested = true;
+  snapshot.results = [];
+  snapshot.logs = [];
+  snapshot.screenshots = [];
+  snapshot.jobError = null;
+  snapshot.job = "idle";
+  snapshot.step = "Zerado. WhatsApp continua conectado. CRM e GED entram de novo na próxima consulta.";
   touch();
 }
 
