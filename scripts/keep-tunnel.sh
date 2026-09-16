@@ -10,7 +10,7 @@ LOG="$ROOT/data/tunnel.log"
 URL_FILE="$ROOT/data/tunnel-url.txt"
 PUBLISH="/home/ubuntu/.cursor/plugins/cache/cursor-public/50420288/8ec223e927bb2247636aa0653536f63385f05298/skills/here-now/scripts/publish.sh"
 CLOUDFLARED="${CLOUDFLARED_BIN:-$HOME/.local/bin/cloudflared}"
-SLUGS=(cozy-delta-bsqr sable-hollow-2jgv)
+SLUGS=(sable-hollow-2jgv earthy-quasar-wfdb)
 mkdir -p "$ROOT/data"
 
 if [[ ! -x "$CLOUDFLARED" ]]; then
