@@ -6,7 +6,8 @@
     "dev": "next dev --hostname 0.0.0.0 --port 43147",
     "build": "next build",
     "start": "node scripts/start.mjs",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --experimental-strip-types --test src/lib/text.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

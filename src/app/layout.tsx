@@ -10,7 +10,7 @@ const geistSans = Geist({
 export const metadata: Metadata = {
   title: "Unik BKO One — CRM × GED360",
   description:
-    "Consulta status de biometria no CRM Unik, confere digitalização no GED360 e alerta os grupos BKO One Urgente e Gerentes One no WhatsApp.",
+    "Consulta Resultado da Análise no GED360, avisa de hora em hora no WhatsApp 48 99194-0908 e nos grupos BKO One Urgente e Gerentes One.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

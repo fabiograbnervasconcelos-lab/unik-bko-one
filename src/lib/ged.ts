@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { clickFirst, fillFirst, screenshot, visibleText } from "@/lib/browser";
 import { log, setStep } from "@/lib/store";
 import {
+  cleanGedAnalysisValue,
   extractGedAnalysis,
   formatCpf,
   looksLikeEmptyGed,
@@ -93,63 +94,131 @@ async function searchCpf(page: Page, cpf: string) {
   }
 }
 
+/**
+ * A linha Resultado da Análise sobe/desce conforme os campos acima.
+ * Acha o rótulo pelo texto e lê o valor à direita na mesma linha — nunca o rodapé Regional.
+ */
 async function readGedStatusFromDom(page: Page): Promise<string | null> {
   try {
     const value = await page.evaluate(() => {
       const normalize = (s: string) => s.replace(/\s+/g, " ").trim();
-      const labelRe = /resultado da an[aá]lise|status da an[aá]lise|status da digitaliza/i;
+      const labelOnly =
+        /^(resultado da an[aá]lise|status da an[aá]lise)\s*:?\s*$/i;
+      const labelInText = /resultado da an[aá]lise/i;
       const emptyRe =
         /nenhum registro|n[aã]o (foi )?encontr|sem resultado|nenhuma digitaliza|registro n[aã]o localizado/i;
+      const stopRe =
+        /status da digitaliza|local de digitaliza|^linha\(?s?\)?|\bregional\b/i;
+      const junkRe =
+        /^(regional|rsul|rnul|pdv|linha|linhas?|status|analise|conferido|-)$/i;
 
-      const fromNext = (el: Element): string | null => {
+      const accept = (raw: string): string | null => {
+        let value = normalize(raw);
+        const cut = value.search(stopRe);
+        if (cut >= 0) value = value.slice(0, cut).trim();
+        value = value.replace(/^[:.\-–—|/\\]+/, "").replace(/[:.\-–—|/\\]+$/, "").trim();
+        if (value.length < 2 || value.length > 80) return null;
+        if (emptyRe.test(value) || junkRe.test(value) || labelInText.test(value)) return null;
+        if (/^regional\b/i.test(value) || /\bregional\b/i.test(value)) return null;
+        if (/^status da /i.test(value) || /^local de /i.test(value)) return null;
+        return value;
+      };
+
+      const all = Array.from(
+        document.querySelectorAll("td, th, dt, dd, label, span, strong, b, p, div, li, font, em"),
+      );
+
+      const labelEls = all
+        .filter((el) => labelOnly.test(normalize(el.textContent || "")))
+        .sort((a, b) => {
+          const la = (a.textContent || "").length;
+          const lb = (b.textContent || "").length;
+          if (la !== lb) return la - lb;
+          const aa = a.getBoundingClientRect();
+          const bb = b.getBoundingClientRect();
+          return aa.width * aa.height - bb.width * bb.height;
+        });
+
+      const fromSameRow = (el: Element): string | null => {
+        const rect = el.getBoundingClientRect();
+        if (!rect.width && !rect.height) return null;
+        let best: string | null = null;
+        let bestDx = Infinity;
+        for (const other of all) {
+          if (other === el || el.contains(other) || other.contains(el)) continue;
+          const text = normalize(other.textContent || "");
+          if (!text || text.length > 80 || labelInText.test(text)) continue;
+          const r = other.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          const labelMid = (rect.top + rect.bottom) / 2;
+          const otherMid = (r.top + r.bottom) / 2;
+          if (Math.abs(otherMid - labelMid) > Math.max(16, rect.height * 0.75)) continue;
+          if (r.left < rect.right - 8) continue;
+          const dx = r.left - rect.right;
+          if (dx >= bestDx) continue;
+          const ok = accept(text);
+          if (ok) {
+            bestDx = dx;
+            best = ok;
+          }
+        }
+        return best;
+      };
+
+      const fromStructure = (el: Element): string | null => {
         const next = el.nextElementSibling;
         if (next) {
-          const v = normalize(next.textContent || "");
-          if (v && !labelRe.test(v) && v.length >= 2 && v.length <= 80 && !emptyRe.test(v)) {
-            return v;
-          }
+          const v = accept(next.textContent || "");
+          if (v) return v;
         }
         const parent = el.parentElement;
         if (parent) {
           const kids = Array.from(parent.children);
           const idx = kids.indexOf(el);
           if (idx >= 0 && kids[idx + 1]) {
-            const v = normalize(kids[idx + 1].textContent || "");
-            if (v && !labelRe.test(v) && v.length >= 2 && v.length <= 80 && !emptyRe.test(v)) {
-              return v;
-            }
+            const v = accept(kids[idx + 1].textContent || "");
+            if (v) return v;
           }
+          const own = accept(
+            (parent.textContent || "").replace(/resultado da an[aá]lise\s*:?\s*/i, ""),
+          );
+          if (own && normalize(parent.textContent || "").length <= 120) return own;
         }
         const row = el.closest("tr");
         if (row) {
           const cells = Array.from(row.querySelectorAll("th, td"));
-          const i = cells.indexOf(el as HTMLTableCellElement);
+          const i = cells.findIndex((cell) => cell === el || cell.contains(el));
           if (i >= 0 && cells[i + 1]) {
-            const v = normalize(cells[i + 1].textContent || "");
-            if (v && v.length >= 2 && v.length <= 80 && !emptyRe.test(v)) return v;
+            const v = accept(cells[i + 1].textContent || "");
+            if (v) return v;
           }
         }
-        const own = normalize(el.textContent || "");
-        const inline = own.match(
-          /(?:resultado da an[aá]lise|status da an[aá]lise|status da digitaliza(?:ção|cao)?)\s*[:\-–—]?\s*(.+)/i,
-        );
-        if (inline?.[1]) {
-          const v = normalize(inline[1]);
-          if (v && v.length >= 2 && v.length <= 80 && !emptyRe.test(v) && !labelRe.test(v)) {
-            return v;
+        const dl = el.closest("dl");
+        if (dl && el.tagName === "DT") {
+          const dd = el.nextElementSibling;
+          if (dd?.tagName === "DD") {
+            const v = accept(dd.textContent || "");
+            if (v) return v;
           }
         }
         return null;
       };
 
-      const candidates = Array.from(
-        document.querySelectorAll("td, th, dt, dd, label, span, strong, b, p, div, li"),
-      );
-      for (const el of candidates) {
-        const t = normalize(el.textContent || "");
-        if (!labelRe.test(t) || t.length > 160) continue;
-        const found = fromNext(el);
+      for (const el of labelEls) {
+        const found = fromSameRow(el) || fromStructure(el);
         if (found) return found;
+      }
+
+      for (const el of all) {
+        const t = normalize(el.textContent || "");
+        if (!labelInText.test(t) || t.length > 160) continue;
+        const inline = t.match(
+          /resultado da an[aá]lise\s*[:\-–—]?\s*(.+)$/i,
+        );
+        if (inline?.[1]) {
+          const v = accept(inline[1]);
+          if (v) return v;
+        }
       }
       return null;
     });
@@ -173,7 +242,7 @@ export async function lookupGedCpf(page: Page, cpf: string): Promise<GedLookup> 
   }
 
   const empty = looksLikeEmptyGed(text);
-  const fromDom = empty ? null : await readGedStatusFromDom(page);
+  const fromDom = empty ? null : cleanGedAnalysisValue((await readGedStatusFromDom(page)) ?? "");
   const fromText = empty ? null : extractGedAnalysis(text);
   const result = fromDom || fromText;
   const hasDigitization = Boolean(result);

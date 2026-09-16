@@ -85,7 +85,7 @@ function ResultRow({ row }: { row: LeadResult }) {
       {row.error ? <p className="mt-2 text-xs text-red-400">{row.error}</p> : null}
       {row.notifyTargets.length ? (
         <p className="mt-2 text-xs text-muted-foreground">
-          Grupos: {row.notifyTargets.join(" · ")}
+          Enviado para: {row.notifyTargets.join(" · ")}
         </p>
       ) : null}
     </div>
@@ -305,10 +305,11 @@ export function Dashboard() {
           </h1>
           <p className="max-w-2xl text-sm text-muted-foreground">
             Lê no CRM quem está em <strong>cancelado/bio expirada</strong> ou{" "}
-            <strong>aguardando biometria</strong>, consulta o CPF no GED360 e avisa os
-            grupos <strong>BKO One Urgente</strong> e <strong>Gerentes One</strong> com o
-            status da tela. Você vê o preview, valida e só então envia. Se o GED não
-            achar nada, não monta mensagem.
+            <strong>aguardando biometria</strong>, consulta o CPF no GED360 e copia o{" "}
+            <strong>Resultado da Análise</strong> da ficha (não o rodapé Regional). De
+            hora em hora o painel lê sozinho e avisa no WhatsApp <strong>48 99194-0908</strong>
+            e nos grupos. Também dispara se você mandar <strong>validar e enviar</strong>{" "}
+            nesse número. Se o GED não achar nada, não monta mensagem.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -316,6 +317,11 @@ export function Dashboard() {
             WhatsApp: {waLabel(snapshot?.whatsapp ?? "disconnected")}
           </Badge>
           <Badge variant="outline">{snapshot?.step ?? "Carregando painel..."}</Badge>
+          {snapshot?.hourlyNote ? (
+            <Badge variant="secondary">{snapshot.hourlyNote}</Badge>
+          ) : (
+            <Badge variant="secondary">Leitura automática a cada 1 hora</Badge>
+          )}
         </div>
       </header>
 
@@ -531,8 +537,10 @@ export function Dashboard() {
           <CardHeader>
             <CardTitle>3. Conferir e enviar no WhatsApp</CardTitle>
             <CardDescription>
-              Cada balão é o texto que vai para os grupos. Marque o que vale, depois
-              clique em validar e enviar. Sem status no GED, não aparece nada aqui.
+              Cada balão é o texto que vai para o seu WhatsApp e para os grupos. Marque
+              o que vale e clique em validar e enviar — ou mande essa frase no WhatsApp
+              do 48 99194-0908. A leitura de hora em hora envia sozinha. Sem status no
+              GED, não aparece nada aqui.
             </CardDescription>
           </CardHeader>
           <CardContent>

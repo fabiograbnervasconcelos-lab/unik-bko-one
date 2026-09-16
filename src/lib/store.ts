@@ -48,6 +48,9 @@ export type AppSnapshot = {
   screenshots: string[];
   updatedAt: string;
   stopRequested: boolean;
+  lastHourlyAt: string | null;
+  hourlyNote: string | null;
+  ownerJid: string | null;
 };
 
 const MAX_LOGS = 250;
@@ -69,6 +72,9 @@ const snapshot: AppSnapshot = globalForApp.unikBkoSnapshot ?? {
   screenshots: [],
   updatedAt: new Date().toISOString(),
   stopRequested: false,
+  lastHourlyAt: null,
+  hourlyNote: null,
+  ownerJid: null,
 };
 
 globalForApp.unikBkoSnapshot = snapshot;
@@ -151,5 +157,16 @@ export function clearRun() {
   snapshot.job = "idle";
   snapshot.stopRequested = false;
   snapshot.step = "Pronto para verificar CRM e GED360.";
+  touch();
+}
+
+export function setHourlyNote(note: string, ran = true) {
+  snapshot.hourlyNote = note;
+  if (ran) snapshot.lastHourlyAt = new Date().toISOString();
+  touch();
+}
+
+export function setOwnerJid(jid: string) {
+  snapshot.ownerJid = jid;
   touch();
 }

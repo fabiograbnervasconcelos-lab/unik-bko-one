@@ -5,23 +5,29 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
+  type WAMessage,
   type WASocket,
 } from "@whiskeysockets/baileys";
 import QRCode from "qrcode";
 import pino from "pino";
+import { defaultOwnerJid, isOwnerDirectChat } from "@/lib/owner";
 import { DATA_DIR, ensureDataDirs, WHATSAPP_AUTH_DIR } from "@/lib/paths";
 import { loadSettings } from "@/lib/settings";
-import { getSnapshot, log, setWhatsAppState } from "@/lib/store";
-import { scoreGroupName } from "@/lib/text";
+import { getSnapshot, log, setOwnerJid, setWhatsAppState } from "@/lib/store";
+import { isValidateAndSendCommand, scoreGroupName } from "@/lib/text";
 
 const logger = pino({ level: "silent" });
 const QR_PNG_PATH = path.join(DATA_DIR, "whatsapp-qr.png");
+const OWNER_JID_PATH = path.join(DATA_DIR, "owner-jid.txt");
+
+export type WhatsAppTarget = "bko" | "gerentes" | "owner";
 
 type WhatsAppRuntime = {
   socket: WASocket | null;
   connecting: boolean;
   shouldReconnect: boolean;
   qrPng: Buffer | null;
+  lastCommandAt: number;
 };
 
 const globalForWa = globalThis as typeof globalThis & {
@@ -33,6 +39,7 @@ const runtime: WhatsAppRuntime = globalForWa.unikBkoWhatsApp ?? {
   connecting: false,
   shouldReconnect: true,
   qrPng: null,
+  lastCommandAt: 0,
 };
 
 globalForWa.unikBkoWhatsApp = runtime;
@@ -62,6 +69,76 @@ function waitUntil(timeoutMs: number, check: () => boolean) {
       }
     }, 150);
   });
+}
+
+function persistOwnerJid(jid: string) {
+  ensureDataDirs();
+  fs.writeFileSync(OWNER_JID_PATH, jid);
+  setOwnerJid(jid);
+}
+
+export function resolveOwnerJid() {
+  if (getSnapshot().ownerJid) return getSnapshot().ownerJid!;
+  if (fs.existsSync(OWNER_JID_PATH)) {
+    const saved = fs.readFileSync(OWNER_JID_PATH, "utf8").trim();
+    if (saved) {
+      setOwnerJid(saved);
+      return saved;
+    }
+  }
+  return defaultOwnerJid();
+}
+
+function incomingText(message: WAMessage) {
+  const content = message.message;
+  if (!content) return "";
+  const inner =
+    content.ephemeralMessage?.message ||
+    content.viewOnceMessage?.message ||
+    content;
+
+  return (
+    inner.conversation ||
+    inner.extendedTextMessage?.text ||
+    inner.imageMessage?.caption ||
+    inner.buttonsResponseMessage?.selectedDisplayText ||
+    inner.templateButtonReplyMessage?.selectedDisplayText ||
+    inner.listResponseMessage?.title ||
+    ""
+  ).trim();
+}
+
+async function handleIncomingCommand(message: WAMessage) {
+  if (message.key.fromMe) return;
+  const remoteJid = message.key.remoteJid;
+  if (!remoteJid) return;
+  if (!isOwnerDirectChat(remoteJid, message.key.participant)) return;
+  persistOwnerJid(remoteJid);
+  const text = incomingText(message);
+  if (!isValidateAndSendCommand(text)) return;
+  if (Date.now() - runtime.lastCommandAt < 8000) {
+    log("info", "Comando WhatsApp ignorado: já está rodando um validar e enviar.");
+    return;
+  }
+  runtime.lastCommandAt = Date.now();
+  log("info", `Comando WhatsApp recebido de ${remoteJid}: ${text}`);
+  try {
+    await runtime.socket?.sendMessage(remoteJid, {
+      text: "Unik BKO: recebi *validar e enviar*. Vou consultar e mandar o que estiver na fila.",
+    });
+  } catch {
+    // ignore reply failure
+  }
+  const { startValidateAndSendFromWhatsApp } = await import("@/lib/pipeline");
+  try {
+    startValidateAndSendFromWhatsApp();
+  } catch (error) {
+    const err = error instanceof Error ? error.message : String(error);
+    log("error", `Comando validar e enviar falhou: ${err}`);
+    await runtime.socket?.sendMessage(remoteJid, { text: `Unik BKO: não consegui executar. ${err}` }).catch(
+      () => undefined,
+    );
+  }
 }
 
 async function saveQr(qr: string) {
@@ -146,6 +223,16 @@ export async function connectWhatsApp() {
     });
 
     runtime.socket.ev.on("creds.update", saveCreds);
+    runtime.socket.ev.on("messages.upsert", async ({ messages, type }) => {
+      if (type !== "notify" && type !== "append") return;
+      for (const message of messages) {
+        try {
+          await handleIncomingCommand(message);
+        } catch (error) {
+          log("warn", `Falha ao ler mensagem WhatsApp: ${String(error)}`);
+        }
+      }
+    });
     runtime.socket.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect, qr } = update;
       if (qr) {
@@ -158,7 +245,7 @@ export async function connectWhatsApp() {
       if (connection === "open") {
         runtime.qrPng = null;
         setWhatsAppState("connected", { qrDataUrl: null, whatsappError: null });
-        log("info", "WhatsApp conectado.");
+        log("info", "WhatsApp conectado. Avisos no 48 99194-0908 e comando validar e enviar ativos.");
         await refreshGroups().catch((error) => {
           log("warn", `Não consegui listar os grupos: ${String(error)}`);
         });
@@ -245,15 +332,25 @@ export async function disconnectWhatsApp() {
   setWhatsAppState("disconnected", { qrDataUrl: null, groups: [] });
 }
 
-export async function sendWhatsAppText(text: string, targets: Array<"bko" | "gerentes">) {
+export async function sendWhatsAppText(text: string, targets: WhatsAppTarget[]) {
   if (!runtime.socket || getSnapshot().whatsapp !== "connected") {
     throw new Error("WhatsApp ainda não está conectado. Escaneie o QR.");
   }
-  const groups = getSnapshot().groups.length
-    ? getSnapshot().groups
-    : await refreshGroups();
+  const unique = Array.from(new Set(targets));
+  const groups = unique.some((target) => target === "bko" || target === "gerentes")
+    ? getSnapshot().groups.length
+      ? getSnapshot().groups
+      : await refreshGroups()
+    : getSnapshot().groups;
   const sentTo: string[] = [];
-  for (const target of targets) {
+  for (const target of unique) {
+    if (target === "owner") {
+      const jid = resolveOwnerJid();
+      await runtime.socket.sendMessage(jid, { text });
+      sentTo.push("WhatsApp pessoal (48 99194-0908)");
+      log("info", `WhatsApp enviado para o número pessoal ${jid}.`);
+      continue;
+    }
     const group = groups.find((item) => item.matched === target);
     if (!group) {
       log("error", `Grupo ${target} não encontrado na lista do WhatsApp.`);
@@ -264,7 +361,7 @@ export async function sendWhatsAppText(text: string, targets: Array<"bko" | "ger
     log("info", `WhatsApp enviado para ${group.name}.`);
   }
   if (!sentTo.length) {
-    throw new Error("Não achei os grupos BKO One Urgente e Gerentes One.");
+    throw new Error("Não achei destino no WhatsApp (número pessoal ou grupos BKO/Gerentes).");
   }
   return sentTo;
 }

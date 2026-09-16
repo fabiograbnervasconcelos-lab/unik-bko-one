@@ -7,8 +7,9 @@ import { isPendingWhatsApp } from "@/lib/message";
 
 function destinationLabel(groups: WhatsAppGroup[]) {
   const names = groups.filter((group) => group.matched).map((group) => group.name);
-  if (names.length) return names.join(" · ");
-  return "BKO One Urgente · Gerentes One";
+  const personal = "WhatsApp 48 99194-0908";
+  if (names.length) return `${personal} · ${names.join(" · ")}`;
+  return `${personal} · BKO One Urgente · Gerentes One`;
 }
 
 export function WhatsAppPreview({
@@ -51,7 +52,7 @@ export function WhatsAppPreview({
                 ? `Para: ${destination}`
                 : sent.length
                   ? "Fila enviada."
-                  : "Quando o GED achar um status, a mensagem aparece aqui para você validar."}
+                  : "Quando o GED achar um Resultado da Análise, a mensagem aparece aqui. A leitura de hora em hora e o comando validar e enviar no WhatsApp também disparam o aviso."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

@@ -2,10 +2,12 @@ import { launchBrowser, newContext } from "@/lib/browser";
 import { collectCrmLeads, loginCrm, type CrmLead } from "@/lib/crm";
 import { loginGed, lookupGedCpf } from "@/lib/ged";
 import { buildAlertMessage, isPendingWhatsApp } from "@/lib/message";
+import { markAlertSent, wasAlertSent } from "@/lib/sent-log";
 import { loadSettings } from "@/lib/settings";
 import {
   getSnapshot,
   log,
+  setHourlyNote,
   setJob,
   setResults,
   setStep,
@@ -15,7 +17,9 @@ import {
   type LeadResult,
 } from "@/lib/store";
 import { formatCpf, isValidCpf, onlyDigits } from "@/lib/text";
-import { isWhatsAppReady, sendWhatsAppText } from "@/lib/whatsapp";
+import { isWhatsAppReady, sendWhatsAppText, type WhatsAppTarget } from "@/lib/whatsapp";
+
+export type PipelineSource = "manual" | "hourly" | "whatsapp";
 
 function parseExtraCpfs(raw: string): CrmLead[] {
   return raw
@@ -33,17 +37,18 @@ function pendingCount(rows: LeadResult[]) {
   return rows.filter(isPendingWhatsApp).length;
 }
 
-function finishScan(results: LeadResult[], stopped: boolean) {
+function finishScan(results: LeadResult[], stopped: boolean, autoSend: boolean) {
   const pending = pendingCount(results);
+  if (autoSend) return pending;
   if (pending > 0) {
     setJob("review", {
       error: null,
       step: stopped
         ? `Parado. ${pending} mensagem(ns) pronta(s) — confira e envie.`
-        : `${pending} mensagem(ns) pronta(s) no WhatsApp. Confira e envie.`,
+        : `${pending} mensagem(ns) pronta(s) no WhatsApp. Confira, envie no painel ou mande validar e enviar no WhatsApp.`,
     });
     log("info", `Consulta pronta para validação. Mensagens a enviar: ${pending}.`);
-    return;
+    return pending;
   }
   if (stopped) {
     setJob("error", {
@@ -51,38 +56,52 @@ function finishScan(results: LeadResult[], stopped: boolean) {
       step: "Parado: nada para enviar no WhatsApp.",
     });
     log("warn", "Consulta interrompida sem mensagens para enviar.");
-    return;
+    return 0;
   }
   setJob("done", {
     step: `Concluído: ${results.length} CPF(s). GED não achou status — nada para enviar.`,
   });
   log("info", "Consulta concluída. Nenhuma mensagem para o WhatsApp.");
+  return 0;
 }
 
-export function startPipeline() {
+function requireReady(settings = loadSettings()) {
   if (getSnapshot().job === "running") {
     throw new Error("Já existe uma verificação em andamento.");
   }
   if (!isWhatsAppReady()) {
     throw new Error("Conecte o WhatsApp pelo QR antes de rodar a verificação.");
   }
-
-  const settings = loadSettings();
   if (!settings.crmUser || !settings.crmPass) {
     throw new Error("Informe usuário e senha do CRM.");
   }
   if (!settings.gedUser || !settings.gedPass) {
     throw new Error("Informe usuário e senha do GED360.");
   }
+  return settings;
+}
 
-  setJob("running", { error: null, step: "Iniciando verificação..." });
+export function startPipeline(options: { autoSend?: boolean; source?: PipelineSource } = {}) {
+  const settings = requireReady();
+  const autoSend = Boolean(options.autoSend);
+  const source = options.source ?? "manual";
+
+  setJob("running", {
+    error: null,
+    step: source === "hourly"
+      ? "Leitura automática de hora em hora..."
+      : source === "whatsapp"
+        ? "Validar e enviar pelo WhatsApp..."
+        : "Iniciando verificação...",
+  });
   clearStop();
-  void executePipeline(settings).catch((error) => {
+  void executePipeline(settings, { autoSend, source }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     if (getSnapshot().job === "running") {
       setJob("error", { error: message, step: "Verificação interrompida." });
     }
     log("error", message);
+    if (source === "hourly") setHourlyNote(`Falha na leitura automática: ${message}`);
   });
   return getSnapshot();
 }
@@ -91,9 +110,18 @@ export async function runPipeline() {
   return startPipeline();
 }
 
-async function executePipeline(settings: ReturnType<typeof loadSettings>) {
+async function executePipeline(
+  settings: ReturnType<typeof loadSettings>,
+  options: { autoSend: boolean; source: PipelineSource },
+) {
+  const { autoSend, source } = options;
   setResults([]);
-  log("info", "Verificação iniciada: CRM → GED360. WhatsApp só depois de validar na tela.");
+  log(
+    "info",
+    source === "hourly"
+      ? "Leitura automática: CRM → GED360 → WhatsApp no 48 99194-0908."
+      : "Verificação iniciada: CRM → GED360. WhatsApp só depois de validar na tela ou pelo comando.",
+  );
 
   const browser = await launchBrowser();
   const results: LeadResult[] = [];
@@ -117,6 +145,15 @@ async function executePipeline(settings: ReturnType<typeof loadSettings>) {
     if (!leads.length) {
       log("warn", "Nenhum CPF encontrado nos status do CRM nem na lista extra.");
       setJob("done", { step: "Nenhum CPF para consultar." });
+      if (source === "hourly") {
+        setHourlyNote("Leitura automática: nenhum CPF no CRM.");
+      }
+      if (autoSend && source === "whatsapp") {
+        await sendWhatsAppText(
+          "Unik BKO: rodei a consulta. Nenhum CPF em aguardando biometria / bio expirada.",
+          ["owner"],
+        ).catch(() => undefined);
+      }
       return getSnapshot();
     }
 
@@ -125,7 +162,7 @@ async function executePipeline(settings: ReturnType<typeof loadSettings>) {
 
     for (const [index, lead] of leads.entries()) {
       if (isStopRequested()) {
-        finishScan(results, true);
+        finishScan(results, true, autoSend);
         return getSnapshot();
       }
       setStep(`GED ${index + 1}/${leads.length}: ${lead.cpf}`);
@@ -172,17 +209,45 @@ async function executePipeline(settings: ReturnType<typeof loadSettings>) {
       }
     }
 
-    finishScan(results, false);
+    const pending = finishScan(results, false, autoSend);
+    if (autoSend) {
+      const queue = getSnapshot().results.filter(
+        (row) => isPendingWhatsApp(row) && row.draftMessage,
+      );
+      if (!queue.length) {
+        setJob("done", {
+          step: `Concluído: ${results.length} CPF(s). GED não achou status — nada para enviar.`,
+        });
+        if (source === "hourly") {
+          setHourlyNote(`Leitura automática: ${results.length} CPF(s), nenhum Resultado da Análise.`);
+        }
+        if (source === "whatsapp") {
+          await sendWhatsAppText(
+            "Unik BKO: consulta ok. O GED não mostrou Resultado da Análise — nada para enviar.",
+            ["owner"],
+          ).catch(() => undefined);
+        }
+        return getSnapshot();
+      }
+      await executeSend(queue, {
+        includeGroups: true,
+        skipDuplicates: source === "hourly",
+        source,
+      });
+      return getSnapshot();
+    }
+    log("info", `Pendentes após a consulta: ${pending}.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setJob("error", { error: message, step: "Verificação interrompida." });
     log("error", message);
+    if (source === "hourly") setHourlyNote(`Falha na leitura automática: ${message}`);
   } finally {
     await browser.close().catch(() => undefined);
   }
 }
 
-export function startSend(ids: string[]) {
+export function startSend(ids: string[], options: { source?: PipelineSource } = {}) {
   if (getSnapshot().job === "running") {
     throw new Error("Aguarde a consulta ou o envio atual terminar.");
   }
@@ -200,7 +265,11 @@ export function startSend(ids: string[]) {
 
   setJob("running", { error: null, step: `Enviando WhatsApp 0/${queue.length}...` });
   clearStop();
-  void executeSend(queue).catch((error) => {
+  void executeSend(queue, {
+    includeGroups: true,
+    skipDuplicates: false,
+    source: options.source ?? "manual",
+  }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     log("error", message);
     if (getSnapshot().job === "running") {
@@ -216,10 +285,19 @@ export async function sendApprovedMessages(ids: string[]) {
 
 async function executeSend(
   queue: LeadResult[],
+  options: { includeGroups: boolean; skipDuplicates: boolean; source: PipelineSource },
 ) {
+  const targets: WhatsAppTarget[] = ["owner"];
+  if (options.includeGroups) {
+    targets.push("bko", "gerentes");
+  }
 
-  log("info", `Envio validado: ${queue.length} mensagem(ns) para os grupos.`);
+  log(
+    "info",
+    `Envio (${options.source}): ${queue.length} mensagem(ns) para ${targets.join(", ")}.`,
+  );
   let sent = 0;
+  let skippedDup = 0;
   for (const row of queue) {
     if (isStopRequested()) {
       const left = pendingCount(getSnapshot().results);
@@ -232,10 +310,20 @@ async function executeSend(
       log("warn", "Envio interrompido pelo usuário.");
       return getSnapshot();
     }
+    if (options.skipDuplicates && row.gedResult && wasAlertSent(row.cpf, row.gedResult)) {
+      patchResult(row.id, {
+        notified: true,
+        notifyTargets: ["já avisado nas últimas 24h"],
+      });
+      skippedDup += 1;
+      log("info", `GED ${row.cpf}: mesmo Resultado da Análise já foi avisado. Não reenvio.`);
+      continue;
+    }
     setStep(`Enviando WhatsApp ${sent + 1}/${queue.length}: ${row.cpf}`);
     try {
-      const targets = await sendWhatsAppText(row.draftMessage!, ["bko", "gerentes"]);
-      patchResult(row.id, { notified: true, notifyTargets: targets });
+      const dest = await sendWhatsAppText(row.draftMessage!, targets);
+      patchResult(row.id, { notified: true, notifyTargets: dest });
+      if (row.gedResult) markAlertSent(row.cpf, row.gedResult);
       sent += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -252,11 +340,35 @@ async function executeSend(
     });
   } else {
     setJob("done", {
-      step: `Concluído: ${sent} alerta(s) enviados no WhatsApp.`,
+      step: `Concluído: ${sent} alerta(s) enviados no WhatsApp${skippedDup ? ` (${skippedDup} já avisado(s))` : ""}.`,
     });
   }
-  log("info", `Envio concluído. Enviadas: ${sent}. Pendentes: ${left}.`);
+  if (options.source === "hourly") {
+    setHourlyNote(
+      sent
+        ? `Leitura automática: ${sent} aviso(s) no WhatsApp 48 99194-0908.`
+        : skippedDup
+          ? "Leitura automática: nada novo (já tinha avisado estes resultados)."
+          : "Leitura automática: nenhum Resultado da Análise para avisar.",
+    );
+  }
+  log("info", `Envio concluído. Enviadas: ${sent}. Pendentes: ${left}. Duplicatas: ${skippedDup}.`);
   return getSnapshot();
+}
+
+export function startValidateAndSendFromWhatsApp() {
+  const pending = getSnapshot().results.filter(isPendingWhatsApp);
+  if (pending.length) {
+    log("info", `WhatsApp validar e enviar: ${pending.length} mensagem(ns) já na fila.`);
+    return startSend(pending.map((row) => row.id), { source: "whatsapp" });
+  }
+  log("info", "WhatsApp validar e enviar: fila vazia — vou consultar CRM/GED e enviar o que achar.");
+  return startPipeline({ autoSend: true, source: "whatsapp" });
+}
+
+export function startHourlyRun() {
+  log("info", "Disparo automático de hora em hora.");
+  return startPipeline({ autoSend: true, source: "hourly" });
 }
 
 export function discardMessages(ids: string[]) {
@@ -282,7 +394,7 @@ export async function sendTestWhatsApp() {
   }
   const sent = await sendWhatsAppText(
     "Teste Unik BKO One — conexão do painel ok. Podem ignorar esta mensagem.",
-    ["bko", "gerentes"],
+    ["owner", "bko", "gerentes"],
   );
   log("info", `Teste enviado para: ${sent.join(", ")}`);
   return sent;

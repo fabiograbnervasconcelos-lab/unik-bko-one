@@ -52,39 +52,72 @@ export function matchCrmStatus(text: string): CrmStatus | null {
 const EMPTY_GED_HINT =
   /nenhum registro|nao (foi )?encontr|n[aã]o (foi )?encontr|sem resultado|nenhuma digitaliza|registro n[aã]o localizado|cpf n[aã]o localizado|sem digitaliza/i;
 
-const NEXT_GED_LABEL =
-  /(?:\bprotocolo\b|\bcpf\b|\bcnpj\b|\bdata\s|\borigem\b|\boperadora\b|\bvisualizar\b|\bfiltrar\b)/i;
+/** Labels that appear after Resultado da Análise on the GED card (and the Regional footer). */
+export const GED_VALUE_STOP =
+  /(?:status da digitaliza(?:ção|cao)?|local de digitaliza(?:ção|cao)?|linha\(?s?\)?\s*:|^\s*linha\(?s?\)?|\bregional\b|\bprotocolo\b|\bvisualizar\b|\bfiltrar\b)/i;
+
+const JUNK_GED_VALUE =
+  /^(regional|rsul|rnul|r[ns]ul|pdv|linha|linhas?|status|analise|an[aá]lise|conferido|resultado|-|–|—)$/i;
+
+export function isJunkGedAnalysis(value: string) {
+  const n = normalizeText(value);
+  if (!n || n.length < 2) return true;
+  if (JUNK_GED_VALUE.test(n)) return true;
+  if (/^regional\b/.test(n)) return true;
+  if (/\bregional\b/.test(n) && /\brs?ul\b/.test(n)) return true;
+  if (/^status da /.test(n)) return true;
+  if (/^local de /.test(n)) return true;
+  if (/^linha/.test(n)) return true;
+  if (/^resultado da an/.test(n)) return true;
+  return false;
+}
 
 export function looksLikeEmptyGed(pageText: string) {
   return EMPTY_GED_HINT.test(pageText);
 }
 
-function cleanGedStatus(raw: string): string | null {
+export function cleanGedAnalysisValue(raw: string): string | null {
   let value = raw.replace(/\s+/g, " ").trim();
-  const cut = value.search(NEXT_GED_LABEL);
-  if (cut > 0) value = value.slice(0, cut).trim();
+  const cut = value.search(GED_VALUE_STOP);
+  if (cut >= 0) value = value.slice(0, cut).trim();
   value = value.replace(/^[:.\-–—|/\\]+/, "").replace(/[:.\-–—|/\\]+$/, "").trim();
   if (value.length < 2 || value.length > 80) return null;
   if (EMPTY_GED_HINT.test(value)) return null;
   if (/^(resultado da an[aá]lise|an[aá]lise|status)$/i.test(value)) return null;
+  if (isJunkGedAnalysis(value)) return null;
   return value;
 }
 
-/** Pega o texto que aparece em Resultado da Análise / Status na tela do GED. */
+/** Pega o texto que aparece em Resultado da Análise na tela do GED, mesmo se a linha sobe ou desce. */
 export function extractGedAnalysis(pageText: string): string | null {
   const patterns = [
-    /resultado da an[aá]lise\s*[:\-–—]?\s*([^\n\r|]{2,120})/i,
-    /status da an[aá]lise\s*[:\-–—]?\s*([^\n\r|]{2,120})/i,
-    /status da digitaliza(?:ção|cao)\s*[:\-–—]?\s*([^\n\r|]{2,120})/i,
+    /resultado da an[aá]lise\s*[:\-–—]?\s*([^\n\r|]{1,160})/gi,
+    /status da an[aá]lise\s*[:\-–—]?\s*([^\n\r|]{1,160})/gi,
   ];
   for (const re of patterns) {
-    const match = pageText.match(re);
-    if (match?.[1]) {
-      const cleaned = cleanGedStatus(match[1]);
+    re.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(pageText))) {
+      const cleaned = cleanGedAnalysisValue(match[1] ?? "");
       if (cleaned) return cleaned;
     }
   }
+
+  const nextLine =
+    /resultado da an[aá]lise\s*[:\-–—]?\s*[\n\r]+\s*([^\n\r]{2,160})/gi;
+  let match: RegExpExecArray | null;
+  while ((match = nextLine.exec(pageText))) {
+    const cleaned = cleanGedAnalysisValue(match[1] ?? "");
+    if (cleaned) return cleaned;
+  }
   return null;
+}
+
+export function isValidateAndSendCommand(text: string) {
+  const n = normalizeText(text);
+  if (!n) return false;
+  if (n.length > 80) return false;
+  return /\bvalidar\b/.test(n) && /\benviar\b/.test(n);
 }
 
 export function hasDigitizationScreen(pageText: string) {
