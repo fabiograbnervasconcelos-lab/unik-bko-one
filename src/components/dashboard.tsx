@@ -18,7 +18,16 @@ import type { AppSnapshot, LeadResult, LogLine, WhatsAppGroup } from "@/lib/stor
 import type { AppSettings } from "@/lib/settings";
 import { isPendingWhatsApp } from "@/lib/message";
 
-type StatusPayload = AppSnapshot & { settings: AppSettings; hasQr?: boolean };
+type VendorBotStatus = {
+  loggedIn: number;
+  sessions: { jid: string; phase: string; crmUser: string | null; busy: boolean }[];
+};
+
+type StatusPayload = AppSnapshot & {
+  settings: AppSettings;
+  hasQr?: boolean;
+  vendorBot?: VendorBotStatus;
+};
 
 const EMPTY_RESULTS: LeadResult[] = [];
 
@@ -98,6 +107,9 @@ export function Dashboard() {
   const [sending, setSending] = useState(false);
   const [testing, setTesting] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [refreshingQr, setRefreshingQr] = useState(false);
+  const [askingLogin, setAskingLogin] = useState(false);
+  const [vendorPhone, setVendorPhone] = useState("4891940908");
   const [notice, setNotice] = useState<string | null>(null);
   const [qrTick, setQrTick] = useState(0);
   const [qrFailed, setQrFailed] = useState(false);
@@ -256,6 +268,46 @@ export function Dashboard() {
     }
   }
 
+  async function refreshWhatsAppQr() {
+    setRefreshingQr(true);
+    setNotice(null);
+    setQrFailed(false);
+    try {
+      const response = await fetch("/api/whatsapp/qr-refresh", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Não foi possível gerar outro QR.");
+      setQrTick((value) => value + 1);
+      setNotice("Novo QR gerado. Escaneie no celular (Aparelhos conectados).");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRefreshingQr(false);
+      void refresh();
+    }
+  }
+
+  async function askVendorCrmLogin() {
+    setAskingLogin(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/whatsapp/ask-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: vendorPhone.trim() || undefined }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Não foi possível enviar o pedido.");
+      setNotice(
+        `Pedido de usuário/senha do CRM enviado para: ${(data.sentTo ?? []).join(", ")}`,
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAskingLogin(false);
+      void refresh();
+    }
+  }
+
   async function resetCrmGed() {
     if (
       !window.confirm(
@@ -365,7 +417,8 @@ export function Dashboard() {
             <CardTitle>1. WhatsApp — leia o QR aqui</CardTitle>
             <CardDescription>
               No celular: WhatsApp → Aparelhos conectados → Conectar um aparelho. O QR
-              atualiza sozinho.
+              atualiza sozinho. Com a sessão ativa, qualquer vendedor pode mandar mensagem
+              neste número: o bot pede login/senha do CRM e consulta só a aba NIO.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -374,6 +427,9 @@ export function Dashboard() {
                 <div className="space-y-2 text-center text-zinc-800">
                   <p className="text-lg font-semibold">Sessão ativa</p>
                   <p className="text-sm">Pode rodar a verificação. Não precisa escanear de novo.</p>
+                  <p className="text-sm text-zinc-600">
+                    Bot vendedores: {snapshot?.vendorBot?.loggedIn ?? 0} logado(s) no CRM
+                  </p>
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-3">
@@ -418,9 +474,18 @@ export function Dashboard() {
                 </p>
               )}
             </div>
-            <Button variant="outline" disabled={!connected || testing} onClick={() => void testWhatsApp()}>
-              {testing ? "Enviando teste..." : "Enviar mensagem de teste"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                disabled={refreshingQr}
+                onClick={() => void refreshWhatsAppQr()}
+              >
+                {refreshingQr ? "Gerando QR..." : "Gerar outro QR"}
+              </Button>
+              <Button variant="outline" disabled={!connected || testing} onClick={() => void testWhatsApp()}>
+                {testing ? "Enviando teste..." : "Enviar mensagem de teste"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -604,6 +669,55 @@ export function Dashboard() {
           </CardContent>
         </Card>
       </section>
+
+      <Card className="border-emerald-500/25">
+        <CardHeader>
+          <CardTitle>Bot vendedor — preencher login e senha do CRM</CardTitle>
+          <CardDescription>
+            Envia no WhatsApp o pedido em duas etapas: primeiro o <strong>usuário</strong>,
+            depois a <strong>senha</strong>. Cada vendedor entra com a própria conta (só NIO).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+            <div className="space-y-2">
+              <Label htmlFor="vendorPhone">WhatsApp do vendedor (DDD + número)</Label>
+              <input
+                id="vendorPhone"
+                name="vendorPhone"
+                value={vendorPhone}
+                onChange={(event) => setVendorPhone(event.target.value)}
+                placeholder="4891940908"
+                className="flex h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <p className="text-xs text-muted-foreground">
+                O bot responde: etapa 1/2 usuário → etapa 2/2 senha → menu. Só marca{" "}
+                <em>Logado</em> depois de entrar de verdade no CRM.
+              </p>
+            </div>
+            <Button
+              disabled={!connected || askingLogin}
+              onClick={() => void askVendorCrmLogin()}
+            >
+              {askingLogin ? "Enviando..." : "Enviar pedido de login/senha"}
+            </Button>
+          </div>
+          {snapshot?.vendorBot?.sessions?.length ? (
+            <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Sessões recentes</p>
+              <ul className="space-y-1">
+                {snapshot.vendorBot.sessions.map((session) => (
+                  <li key={session.jid} className="flex flex-wrap gap-2 font-mono text-xs">
+                    <span>{session.jid}</span>
+                    <Badge variant="outline">{session.phase}</Badge>
+                    {session.crmUser ? <Badge>{session.crmUser}</Badge> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
