@@ -43,9 +43,11 @@ async function tryLogin(jid: string, user: string, pass: string): Promise<Vendor
   const session = getVendorSession(jid);
   session.busy = true;
   log("info", `Tentando login CRM vendedor (${user})…`);
+  const outgoing: VendorOutgoing[] = texts(`⏳ Entrando no CRM com *${user}*…`);
   try {
     await openVendorCrm(jid, user, pass);
-    return texts(loggedInMessage(user));
+    outgoing.push(...texts(loggedInMessage(user)));
+    return outgoing;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log("warn", `Login CRM vendedor falhou (${user}): ${message}`);
@@ -55,7 +57,8 @@ async function tryLogin(jid: string, user: string, pass: string): Promise<Vendor
       crmUser: null,
       pendingUser: user,
     });
-    return texts(loginErrorMessage(user));
+    outgoing.push(...texts(loginErrorMessage(user)));
+    return outgoing;
   } finally {
     const current = getVendorSession(jid);
     current.busy = false;

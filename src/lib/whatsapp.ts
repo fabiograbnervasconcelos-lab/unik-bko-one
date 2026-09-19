@@ -224,25 +224,7 @@ async function handleIncomingCommand(message: WAMessage) {
       ` (${text.length} chars)`,
   );
   try {
-    const { getVendorSession } = await import("@/lib/vendor-session");
     const { handleVendorMessage } = await import("@/lib/vendor-bot");
-    const before = getVendorSession(sessionJid);
-    // Feedback imediato enquanto o Playwright abre o CRM
-    if (before.phase === "awaiting_pass" && before.pendingUser && before.busy === false) {
-      const looksLikeCreds =
-        /\n/.test(text) ||
-        /(?:usuario|usu[aá]rio|login|user)\s*[:=]/i.test(text) ||
-        /(?:senha|password|pass)\s*[:=]/i.test(text);
-      const labeledUserOnly = /^(?:usuario|usu[aá]rio|login|user)\s*[:=]/i.test(text.trim());
-      if (!labeledUserOnly) {
-        await replyText(
-          replyJid,
-          looksLikeCreds
-            ? `⏳ Entrando no CRM…`
-            : `⏳ Entrando no CRM com *${before.pendingUser}*…`,
-        );
-      }
-    }
     const replies = await handleVendorMessage(sessionJid, text);
     for (const reply of replies) {
       if (reply.kind === "text") {
