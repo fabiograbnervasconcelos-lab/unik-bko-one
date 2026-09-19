@@ -14,5 +14,23 @@ export async function OPTIONS() {
 }
 
 export async function GET() {
-  return cors(NextResponse.json({ ok: true, ts: Date.now() }));
+  const sha =
+    process.env.RAILWAY_GIT_COMMIT_SHA ||
+    process.env.GIT_SHA ||
+    process.env.BUILD_SHA ||
+    "local";
+  return cors(
+    NextResponse.json({
+      ok: true,
+      ts: Date.now(),
+      gitSha: sha.slice(0, 12),
+      features: {
+        vendorBot: true,
+        faturaOpcao6: true,
+        faturaRoboUrl:
+          process.env.FATURA_ROBO_URL ||
+          "https://robo-one-telecom-production.up.railway.app",
+      },
+    }),
+  );
 }
