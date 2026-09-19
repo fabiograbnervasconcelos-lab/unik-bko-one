@@ -101,26 +101,24 @@ export async function startNioAddressLookup(cep: string, numero: string) {
 
   const status = String(last.status || "").toUpperCase();
   const rawList = Array.isArray(last.logradouros) ? last.logradouros : [];
-  const logradouros: NioLogradouro[] = rawList
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      const row = item as Record<string, unknown>;
-      const addressId = row.addressId != null ? String(row.addressId) : "";
-      if (!addressId) return null;
-      return {
-        addressId,
-        descricao: String(row.descricao || ""),
-        tipoLogradouro: row.tipoLogradouro != null ? String(row.tipoLogradouro) : undefined,
-        nomeLogradouro: row.nomeLogradouro != null ? String(row.nomeLogradouro) : undefined,
-        bairro: row.bairro != null ? String(row.bairro) : undefined,
-        cidade: row.cidade != null ? String(row.cidade) : undefined,
-        uf: row.uf != null ? String(row.uf) : undefined,
-        cep: row.cep != null ? String(row.cep) : undefined,
-        temFachada: row.temFachada !== false,
-      } satisfies NioLogradouro;
-    })
-    .filter((row): row is NioLogradouro => Boolean(row));
-
+  const logradouros: NioLogradouro[] = [];
+  for (const item of rawList) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const addressId = row.addressId != null ? String(row.addressId) : "";
+    if (!addressId) continue;
+    logradouros.push({
+      addressId,
+      descricao: String(row.descricao || ""),
+      tipoLogradouro: row.tipoLogradouro != null ? String(row.tipoLogradouro) : undefined,
+      nomeLogradouro: row.nomeLogradouro != null ? String(row.nomeLogradouro) : undefined,
+      bairro: row.bairro != null ? String(row.bairro) : undefined,
+      cidade: row.cidade != null ? String(row.cidade) : undefined,
+      uf: row.uf != null ? String(row.uf) : undefined,
+      cep: row.cep != null ? String(row.cep) : undefined,
+      temFachada: row.temFachada !== false,
+    });
+  }
   if (status === "ENDERECO_NAO_ENCONTRADO" || !logradouros.length) {
     return { hash, status, logradouros: [] as NioLogradouro[] };
   }
