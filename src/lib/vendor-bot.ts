@@ -174,16 +174,25 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
     return texts(askCpfFaturaMessage());
   }
 
-  if ((session.phase === "menu" || session.phase === "awaiting_cpf") && session.crmUser && session.page) {
+  // Logado no CRM: menu / atalho CPF. Opção 6 (fatura) não precisa do Playwright.
+  if ((session.phase === "menu" || session.phase === "awaiting_cpf") && session.crmUser) {
     const option = optionFromText(raw);
     if (!option) {
-      // Se mandou CPF direto no menu, também aceita como atalho da opção 6
       const doc = parseDocumentInput(raw);
       if (doc) {
         setVendorPhase(jid, "awaiting_cpf");
         return runFaturaLookup(jid, doc);
       }
       return texts(menuMessage(session.crmUser));
+    }
+    if (option === "faturas" || option === "encerrar") {
+      return runOption(jid, option);
+    }
+    if (!session.page) {
+      return texts(
+        `⚠️ A aba do CRM caiu. Envie o *usuário* de novo para reabrir,\n` +
+          `ou digite *6* para consultar fatura sem o CRM.`,
+      );
     }
     return runOption(jid, option);
   }

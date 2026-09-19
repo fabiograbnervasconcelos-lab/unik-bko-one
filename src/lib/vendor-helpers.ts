@@ -269,7 +269,7 @@ export function askCpfFaturaMessage() {
     `Envie o *CPF* (ou CNPJ) do cliente em qualquer formato.\n` +
     `Exemplos: \`591.028.530-00\` ou \`59102853000\`\n\n` +
     `_Digite *7* para encerrar ou *1–5* para outras opções._\n` +
-    `_v-fatura-6_`
+    `_build-fatura6-20260919_`
   );
 }
 

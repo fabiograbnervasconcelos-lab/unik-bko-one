@@ -13,8 +13,10 @@ export async function GET() {
     ok: true,
     gitSha: sha,
     shortSha: sha.slice(0, 12),
+    buildId: "fatura6-20260919",
     faturaOpcao6: true,
     askCpfOnOption6: true,
+    noEmBreve: true,
     timezone: "America/Sao_Paulo",
     builtAt: new Date().toISOString(),
   });
