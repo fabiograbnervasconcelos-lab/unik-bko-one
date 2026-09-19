@@ -107,6 +107,7 @@ export function Dashboard() {
   const [sending, setSending] = useState(false);
   const [testing, setTesting] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [refreshingQr, setRefreshingQr] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [qrTick, setQrTick] = useState(0);
   const [qrFailed, setQrFailed] = useState(false);
@@ -261,6 +262,24 @@ export function Dashboard() {
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
       setTesting(false);
+      void refresh();
+    }
+  }
+
+  async function refreshWhatsAppQr() {
+    setRefreshingQr(true);
+    setNotice(null);
+    setQrFailed(false);
+    try {
+      const response = await fetch("/api/whatsapp/qr-refresh", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Não foi possível gerar outro QR.");
+      setQrTick((value) => value + 1);
+      setNotice("Novo QR gerado. Escaneie no celular (Aparelhos conectados).");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRefreshingQr(false);
       void refresh();
     }
   }
@@ -431,9 +450,18 @@ export function Dashboard() {
                 </p>
               )}
             </div>
-            <Button variant="outline" disabled={!connected || testing} onClick={() => void testWhatsApp()}>
-              {testing ? "Enviando teste..." : "Enviar mensagem de teste"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                disabled={refreshingQr}
+                onClick={() => void refreshWhatsAppQr()}
+              >
+                {refreshingQr ? "Gerando QR..." : "Gerar outro QR"}
+              </Button>
+              <Button variant="outline" disabled={!connected || testing} onClick={() => void testWhatsApp()}>
+                {testing ? "Enviando teste..." : "Enviar mensagem de teste"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
 

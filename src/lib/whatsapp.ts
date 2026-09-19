@@ -358,7 +358,22 @@ export async function disconnectWhatsApp() {
     // ignore
   }
   runtime.socket = null;
+  runtime.connecting = false;
+  runtime.qrPng = null;
   setWhatsAppState("disconnected", { qrDataUrl: null, groups: [] });
+}
+
+/** Apaga a sessão salva e abre um QR novo para parear de novo. */
+export async function regenerateWhatsAppQr() {
+  await disconnectWhatsApp();
+  ensureDataDirs();
+  fs.rmSync(WHATSAPP_AUTH_DIR, { recursive: true, force: true });
+  fs.rmSync(QR_PNG_PATH, { force: true });
+  fs.mkdirSync(WHATSAPP_AUTH_DIR, { recursive: true });
+  // Pequena pausa para o socket antigo soltar de vez.
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  runtime.shouldReconnect = true;
+  return connectWhatsApp();
 }
 
 async function resolveOwnerSendJids() {
