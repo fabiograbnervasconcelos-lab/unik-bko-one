@@ -153,17 +153,34 @@ async function collectBySearch(page: Page, url: string, search: string, kind: Ve
 
 export async function loginCrmAsVendor(page: Page, user: string, pass: string) {
   await page.goto(CRM_LOGIN, { waitUntil: "domcontentloaded", timeout: 45000 });
-  await fillFirst(page, ['input[name="usuario"]', 'input[placeholder="Usuario"]'], user);
+  await fillFirst(page, ['input[name="usuario"]', 'input[placeholder="Usuario"]'], user.trim());
   await fillFirst(page, ['input[name="senha"]', 'input[type="password"]'], pass);
   await Promise.all([
     page.waitForLoadState("domcontentloaded").catch(() => undefined),
     clickFirst(page, ['button[type="submit"]', 'button:has-text("Entrar")']),
   ]);
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(2500);
+
+  // SweetAlert "Acesso Negado" / "Dados Incorretos"
+  const denied = page.locator(".sweet-alert, .swal2-popup, .sa-error").first();
+  if (await denied.isVisible().catch(() => false)) {
+    const deniedText = (await denied.innerText().catch(() => "")) || "";
+    if (/acesso negado|dados incorretos|incorreto/i.test(deniedText)) {
+      throw new Error("CRM_LOGIN_DENIED");
+    }
+  }
+
   if (page.url().includes("login.php")) {
     throw new Error("CRM_LOGIN_DENIED");
   }
-  log("info", `CRM vendedor autenticado (${user}) em ${page.url()}`);
+
+  // Confirma sessão entrando no Histórico NIO
+  await page.goto(CRM_NIO_HISTORICO, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => undefined);
+  await page.waitForTimeout(1200);
+  if (page.url().includes("login.php")) {
+    throw new Error("CRM_LOGIN_DENIED");
+  }
+  log("info", `CRM vendedor autenticado (${user.trim()}) em ${page.url()}`);
 }
 
 export async function logoutCrmPage(page: Page) {

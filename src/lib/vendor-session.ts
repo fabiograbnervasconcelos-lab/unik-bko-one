@@ -110,10 +110,23 @@ export async function openVendorCrm(jid: string, user: string, pass: string) {
 
 export async function getVendorPage(jid: string) {
   const session = getVendorSession(jid);
-  if (!session.page || session.phase !== "menu") {
+  // Aceita menu ou busy: a busca marca busy sem derrubar a sessão logada.
+  if (!session.page || !session.crmUser) {
     throw new Error("VENDOR_NOT_LOGGED");
   }
-  // Se caiu no login, força relogar
+  if (session.phase !== "menu" && session.phase !== "busy") {
+    throw new Error("VENDOR_NOT_LOGGED");
+  }
+  try {
+    if (session.page.isClosed()) {
+      await destroyVendorSession(jid, { logout: false });
+      throw new Error("VENDOR_NOT_LOGGED");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "VENDOR_NOT_LOGGED") throw error;
+    await destroyVendorSession(jid, { logout: false });
+    throw new Error("VENDOR_NOT_LOGGED");
+  }
   const url = session.page.url();
   if (url.includes("login.php")) {
     await destroyVendorSession(jid, { logout: false });

@@ -70,7 +70,8 @@ test("layout da resposta sempre traz quantidade", () => {
 });
 
 test("mensagens de menu e login estão claras", () => {
-  assert.match(askLoginMessage(), /usuário e senha/i);
+  assert.match(askLoginMessage(), /usuário/i);
+  assert.match(askLoginMessage(), /1\/2/);
   assert.match(loggedInMessage("vend01"), /Logado/);
   assert.match(menuMessage("vend01"), /\*\(1\)\*/);
   assert.match(menuMessage("vend01"), /\*\(7\)\*/);

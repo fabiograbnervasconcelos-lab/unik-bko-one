@@ -189,26 +189,37 @@ export function loggedInMessage(crmUser: string) {
 }
 
 export function askLoginMessage() {
+  return askUserOnlyMessage();
+}
+
+/** Pedido claro: só o campo usuário primeiro. */
+export function askUserOnlyMessage() {
   return (
-    `Olá! Sou o assistente do *CRM Unik* para vendedores.\n\n` +
-    `Envie seu *usuário e senha* do CRM.\n` +
-    `Exemplos:\n` +
-    `• \`meu.usuario minhaSenha\`\n` +
-    `• em duas linhas:\n` +
-    `\`meu.usuario\`\n` +
-    `\`minhaSenha\`\n\n` +
-    `_Cada vendedor só acessa a própria conta._`
+    `🔐 *Acesso ao CRM Unik*\n\n` +
+    `Preencha em duas etapas:\n\n` +
+    `*1/2 — Usuário*\n` +
+    `Envie agora só o *usuário* do CRM (exemplo: \`Elisangela\`).\n\n` +
+    `Depois eu peço a *senha*.\n\n` +
+    `_Se preferir, pode mandar nas duas linhas:_\n` +
+    `\`usuario\`\n` +
+    `\`senha\``
   );
 }
 
 export function askPasswordMessage(user: string) {
-  return `Recebi o usuário *${user}*.\nAgora envie a *senha* do CRM.`;
+  return (
+    `🔐 *Acesso ao CRM Unik*\n\n` +
+    `*2/2 — Senha*\n` +
+    `Usuário: *${user}*\n\n` +
+    `Agora envie só a *senha* do CRM.`
+  );
 }
 
 export function loginErrorMessage() {
   return (
-    `❌ Deu erro ao logar no CRM.\n` +
-    `Pode tentar novamente? Envie *usuário e senha*.`
+    `❌ Não consegui entrar no CRM com esses dados.\n\n` +
+    `Pode tentar de novo?\n` +
+    `Envie o *usuário* do CRM.`
   );
 }
 

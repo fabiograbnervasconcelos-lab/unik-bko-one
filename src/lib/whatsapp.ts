@@ -14,7 +14,7 @@ import { defaultOwnerJid, isOwnerDirectChat, ownerDigits } from "@/lib/owner";
 import { DATA_DIR, ensureDataDirs, WHATSAPP_AUTH_DIR } from "@/lib/paths";
 import { loadSettings } from "@/lib/settings";
 import { getSnapshot, log, setOwnerJid, setWhatsAppState } from "@/lib/store";
-import { isValidateAndSendCommand, scoreGroupName } from "@/lib/text";
+import { isValidateAndSendCommand, onlyDigits, scoreGroupName } from "@/lib/text";
 
 const logger = pino({ level: "silent" });
 const QR_PNG_PATH = path.join(DATA_DIR, "whatsapp-qr.png");
@@ -456,4 +456,20 @@ export async function sendWhatsAppText(text: string, targets: WhatsAppTarget[]) 
 
 export function isWhatsAppReady() {
   return Boolean(runtime.socket) && getSnapshot().whatsapp === "connected";
+}
+
+/** Envia texto 1:1 para um JID ou número (com DDI 55 se faltar). */
+export async function sendDirectWhatsApp(to: string, text: string) {
+  if (!runtime.socket || getSnapshot().whatsapp !== "connected") {
+    throw new Error("WhatsApp ainda não está conectado. Escaneie o QR.");
+  }
+  let jid = to.trim();
+  if (!jid.includes("@")) {
+    const digits = onlyDigits(jid);
+    const withCountry = digits.startsWith("55") ? digits : `55${digits}`;
+    jid = `${withCountry}@s.whatsapp.net`;
+  }
+  await runtime.socket.sendMessage(jid, { text });
+  log("info", `WhatsApp direto enviado para ${jid}.`);
+  return jid;
 }

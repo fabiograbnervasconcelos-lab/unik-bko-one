@@ -108,6 +108,8 @@ export function Dashboard() {
   const [testing, setTesting] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [refreshingQr, setRefreshingQr] = useState(false);
+  const [askingLogin, setAskingLogin] = useState(false);
+  const [vendorPhone, setVendorPhone] = useState("4891940908");
   const [notice, setNotice] = useState<string | null>(null);
   const [qrTick, setQrTick] = useState(0);
   const [qrFailed, setQrFailed] = useState(false);
@@ -280,6 +282,28 @@ export function Dashboard() {
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
       setRefreshingQr(false);
+      void refresh();
+    }
+  }
+
+  async function askVendorCrmLogin() {
+    setAskingLogin(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/whatsapp/ask-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: vendorPhone.trim() || undefined }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Não foi possível enviar o pedido.");
+      setNotice(
+        `Pedido de usuário/senha do CRM enviado para: ${(data.sentTo ?? []).join(", ")}`,
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAskingLogin(false);
       void refresh();
     }
   }
@@ -645,6 +669,55 @@ export function Dashboard() {
           </CardContent>
         </Card>
       </section>
+
+      <Card className="border-emerald-500/25">
+        <CardHeader>
+          <CardTitle>Bot vendedor — preencher login e senha do CRM</CardTitle>
+          <CardDescription>
+            Envia no WhatsApp o pedido em duas etapas: primeiro o <strong>usuário</strong>,
+            depois a <strong>senha</strong>. Cada vendedor entra com a própria conta (só NIO).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+            <div className="space-y-2">
+              <Label htmlFor="vendorPhone">WhatsApp do vendedor (DDD + número)</Label>
+              <input
+                id="vendorPhone"
+                name="vendorPhone"
+                value={vendorPhone}
+                onChange={(event) => setVendorPhone(event.target.value)}
+                placeholder="4891940908"
+                className="flex h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <p className="text-xs text-muted-foreground">
+                O bot responde: etapa 1/2 usuário → etapa 2/2 senha → menu. Só marca{" "}
+                <em>Logado</em> depois de entrar de verdade no CRM.
+              </p>
+            </div>
+            <Button
+              disabled={!connected || askingLogin}
+              onClick={() => void askVendorCrmLogin()}
+            >
+              {askingLogin ? "Enviando..." : "Enviar pedido de login/senha"}
+            </Button>
+          </div>
+          {snapshot?.vendorBot?.sessions?.length ? (
+            <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Sessões recentes</p>
+              <ul className="space-y-1">
+                {snapshot.vendorBot.sessions.map((session) => (
+                  <li key={session.jid} className="flex flex-wrap gap-2 font-mono text-xs">
+                    <span>{session.jid}</span>
+                    <Badge variant="outline">{session.phase}</Badge>
+                    {session.crmUser ? <Badge>{session.crmUser}</Badge> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
