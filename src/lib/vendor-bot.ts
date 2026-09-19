@@ -228,22 +228,18 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
   }
 
   if (session.phase === "awaiting_pass" && session.pendingUser) {
-    // Troca de usuário: mandou outro login em vez da senha
+    // Credenciais completas na mesma mensagem (usuario + senha)
     const both = parseCredentials(raw);
     if (both) return tryLogin(jid, both.user, both.pass);
 
-    const maybeNewUser = captureUsername(raw);
-    if (
-      maybeNewUser &&
-      maybeNewUser.toLowerCase() !== session.pendingUser.toLowerCase() &&
-      !/^(?:senha|password|pass)\s*[:=]/i.test(raw)
-    ) {
-      // Se parece usuário novo (sem prefixo senha), atualiza e pede senha
-      // Só troca se a mensagem for curta (1 token) — senhas longas seguem como senha
-      const tokens = raw.trim().split(/\s+/);
-      if (tokens.length === 1) {
-        setVendorPhase(jid, "awaiting_pass", { pendingUser: maybeNewUser });
-        return texts(askPasswordMessage(maybeNewUser));
+    // Troca explícita de usuário: "usuario: fulano" (nunca tratar senha solta como login)
+    const labeledUser = raw.match(/^(?:usuario|usu[aá]rio|login|user)\s*[:=]\s*(\S+)/i);
+    if (labeledUser?.[1]) {
+      const nextUser = captureUsername(labeledUser[1]) || labeledUser[1];
+      if (nextUser && !isNonUsernameNoise(nextUser)) {
+        setVendorPhase(jid, "awaiting_pass", { pendingUser: nextUser });
+        log("info", `Vendedor trocou usuário CRM para (${nextUser}); pedindo senha.`);
+        return texts(askPasswordMessage(nextUser));
       }
     }
 

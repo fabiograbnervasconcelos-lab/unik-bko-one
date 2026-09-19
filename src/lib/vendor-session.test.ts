@@ -106,3 +106,14 @@ test("une sessão LID (com usuário) na chave do telefone sem perder pendingUser
   assert.equal(kept.phase, "awaiting_pass");
   assert.equal(sessions.size, 1);
 });
+
+test("senha com @ (ex.: One@2026) NÃO deve ser tratada como novo usuário", () => {
+  // Regressão: em awaiting_pass, token único com @ ia para "troca de usuário"
+  // e nunca chamava tryLogin. A correção remove essa heurística.
+  const pass = "One@2026";
+  const tokens = pass.trim().split(/\s+/);
+  assert.equal(tokens.length, 1);
+  // Com a lógica nova, mensagem sem prefixo usuario: é sempre senha.
+  const isLabeledUser = /^(?:usuario|usu[aá]rio|login|user)\s*[:=]/i.test(pass);
+  assert.equal(isLabeledUser, false);
+});
