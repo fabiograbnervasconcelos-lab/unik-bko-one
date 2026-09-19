@@ -56,7 +56,13 @@ O painel precisa de Chrome/Playwright, WhatsApp sempre ligado e disco para a ses
 - **Render:** https://unik-bko-one.onrender.com/ — Docker no plano free (sem disco persistente; a instância dorme quando fica ociosa).
 - **here.now:** página permanente só com iframe; o robô só roda se o servidor (Railway) estiver no ar.
 
-Produção escuta `PORT` (`npm start` → `scripts/start.mjs`). Health check: `GET /api/health`.
+Produção escuta `PORT` (`npm start` → `scripts/start.mjs`). Health check: `GET /api/health`. Versão da build: `GET /api/version` (precisa responder JSON com `faturaOpcao6: true`).
+
+Se `/api/version` der 404 ou `/api/health` não tiver `features.faturaOpcao6`, o Railway **não** está no `main` atual. Merge no GitHub sozinho não atualiza o container. No painel Railway do serviço:
+
+1. **Settings → Source** — repo `unik-bko-one`, branch **`main`** (não outra branch).
+2. **Deployments → Deploy → Deploy latest commit** — gera build nova a partir do `main`. Evite só **Redeploy** numa deployment antiga (isso reaproveita a imagem velha).
+3. Espere a deploy ficar **Success** e abra de novo https://unik-bko-one-production.up.railway.app/api/version
 
 1. Escaneie o QR com o WhatsApp da operação.
 2. Preencha usuário/senha do CRM e do GED360 (domínio BrPronto por padrão).

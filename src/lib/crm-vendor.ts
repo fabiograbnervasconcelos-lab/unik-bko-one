@@ -191,7 +191,7 @@ export async function runVendorCrmQuery(page: Page, kind: VendorQueryKind): Prom
   const { label } = currentMonthParts();
 
   if (kind === "faturas") {
-    // Caminho legado não deve mais responder "em breve"; o bot pede CPF.
+    // Nunca montar stub aqui — o bot WhatsApp pede CPF e consulta o Robô One.
     return withMeta(kind, "Faturas de clientes", [], null, "Envie o CPF do cliente.");
   }
   if (kind === "instalados") {
