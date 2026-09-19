@@ -191,7 +191,8 @@ export async function runVendorCrmQuery(page: Page, kind: VendorQueryKind): Prom
   const { label } = currentMonthParts();
 
   if (kind === "faturas") {
-    return withMeta(kind, "Faturas de clientes", [], null, "Em breve — ainda vamos montar a busca de faturas.");
+    // Caminho legado não deve mais responder "em breve"; o bot pede CPF.
+    return withMeta(kind, "Faturas de clientes", [], null, "Envie o CPF do cliente.");
   }
   if (kind === "instalados") {
     return withMeta(kind, "Instalados", await collectBySearch(page, CRM_NIO_HISTORICO, "instalado", kind), label);

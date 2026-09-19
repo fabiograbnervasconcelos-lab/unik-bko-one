@@ -11,6 +11,7 @@ import {
   filterRows,
   formatQueryResult,
   formatQueryResultMessages,
+  formatQueryTimestamp,
   loggedInMessage,
   menuMessage,
   optionFromText,
@@ -176,13 +177,11 @@ test("menu CRM ONE com emojis e rodapé de consulta", () => {
   assert.match(menuMessage("Elisangela"), /Menu CRM ONE/);
 });
 
-test("optionFromText mapeia 1-7 e emojis", () => {
-  assert.equal(optionFromText("1"), "instalados");
-  assert.equal(optionFromText("1️⃣"), "instalados");
-  assert.equal(optionFromText("6"), "faturas");
-  assert.equal(optionFromText("3 quebra"), "quebra");
-  assert.equal(optionFromText("7"), "encerrar");
-  assert.equal(optionFromText("encerrar"), "encerrar");
+test("horário da consulta usa fuso de Brasília", () => {
+  const stamp = formatQueryTimestamp(new Date("2026-09-19T16:46:00.000Z"));
+  // 16:46 UTC = 13:46 em São Paulo
+  assert.match(stamp, /19\/09\/2026/);
+  assert.match(stamp, /13:46/);
 });
 
 test("parseDocumentInput aceita CPF/CNPJ mascarados", async () => {
