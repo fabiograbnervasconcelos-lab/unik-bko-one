@@ -16,6 +16,7 @@ import {
   askCpfFaturaMessage,
   askPasswordMessage,
   askUserOnlyMessage,
+  coberturaEnderecoOptions,
   formatFaturaText,
   formatQueryResultMessages,
   formatQueryTimestamp,
@@ -23,6 +24,7 @@ import {
   loginErrorMessage,
   menuMessage,
   optionFromText,
+  parseCoberturaEnderecoPick,
   parseCredentials,
   parseDocumentInput,
 } from "@/lib/vendor-helpers";
@@ -201,12 +203,7 @@ async function lookupCoberturaAddresses(jid: string, cep: string, numero: string
     });
     outgoing.push({
       kind: "text",
-      text: askCoberturaEnderecoMessage(
-        result.logradouros.map((item, index) => ({
-          index: index + 1,
-          label: item.descricao || `${item.tipoLogradouro || ""} ${item.nomeLogradouro || ""}`.trim(),
-        })),
-      ),
+      text: askCoberturaEnderecoMessage(coberturaEnderecoOptions(result.logradouros)),
     });
     return outgoing;
   } catch (error) {
@@ -292,30 +289,50 @@ async function finishCoberturaSelection(jid: string, addressIndex: number) {
 
 async function handleCoberturaMessage(jid: string, raw: string): Promise<VendorOutgoing[]> {
   const session = getVendorSession(jid);
-  const option = optionFromText(raw);
-  if (option === "encerrar") return runOption(jid, "encerrar");
-  if (option && option !== "cobertura") {
-    setVendorPhase(jid, "menu", { cobertura: null });
-    return runOption(jid, option);
-  }
+  const cobertura = session.cobertura || emptyCoberturaState();
+
+  // Escapes seguros (não confundem com A/B nem com 1/2 do endereço)
   if (wantsMenu(raw)) {
     setVendorPhase(jid, "menu", { cobertura: null });
     return texts(menuMessage(session.crmUser));
   }
-
-  const cobertura = session.cobertura || emptyCoberturaState();
+  if (/^(encerrar|sair|logout|deslogar)$/i.test(raw.trim()) || /^8\b/.test(raw.trim())) {
+    return runOption(jid, "encerrar");
+  }
 
   if (cobertura.step === "done") {
+    const option = optionFromText(raw);
     if (wantsAnotherCobertura(raw) || option === "cobertura") {
       return startCoberturaFlow(jid);
+    }
+    if (option && option !== "cobertura") {
+      setVendorPhase(jid, "menu", { cobertura: null });
+      return runOption(jid, option);
     }
     setVendorPhase(jid, "menu", { cobertura: null });
     return texts(menuMessage(session.crmUser));
   }
 
+  // Enquanto escolhe endereço: NÃO interpretar 1/2/7 como menu CRM
+  if (cobertura.step === "endereco") {
+    const pick = parseCoberturaEnderecoPick(raw, cobertura.logradouros.length);
+    if (pick == null) {
+      return texts(askCoberturaEnderecoMessage(coberturaEnderecoOptions(cobertura.logradouros)));
+    }
+    return finishCoberturaSelection(jid, pick);
+  }
+
   if (cobertura.step === "cep") {
+    // CEP numérico não pode virar opção de menu
     const cep = parseCepInput(raw);
-    if (!cep) return texts(askCoberturaCepMessage());
+    if (!cep) {
+      const option = optionFromText(raw);
+      if (option && option !== "cobertura") {
+        setVendorPhase(jid, "menu", { cobertura: null });
+        return runOption(jid, option);
+      }
+      return texts(askCoberturaCepMessage());
+    }
     setVendorPhase(jid, "awaiting_cobertura", {
       cobertura: { ...cobertura, step: "numero", cep },
     });
@@ -324,23 +341,15 @@ async function handleCoberturaMessage(jid: string, raw: string): Promise<VendorO
 
   if (cobertura.step === "numero") {
     const numero = parseHouseNumberInput(raw);
-    if (!numero) return texts(askCoberturaNumeroMessage(cobertura.cep || ""));
-    return lookupCoberturaAddresses(jid, cobertura.cep || "", numero);
-  }
-
-  if (cobertura.step === "endereco") {
-    const pick = Number(raw.replace(/\D/g, ""));
-    if (!Number.isFinite(pick) || pick < 1 || pick > cobertura.logradouros.length) {
-      return texts(
-        askCoberturaEnderecoMessage(
-          cobertura.logradouros.map((item, index) => ({
-            index: index + 1,
-            label: item.descricao || `${item.tipoLogradouro || ""} ${item.nomeLogradouro || ""}`.trim(),
-          })),
-        ),
-      );
+    if (!numero) {
+      const option = optionFromText(raw);
+      if (option && option !== "cobertura") {
+        setVendorPhase(jid, "menu", { cobertura: null });
+        return runOption(jid, option);
+      }
+      return texts(askCoberturaNumeroMessage(cobertura.cep || ""));
     }
-    return finishCoberturaSelection(jid, pick - 1);
+    return lookupCoberturaAddresses(jid, cobertura.cep || "", numero);
   }
 
   return startCoberturaFlow(jid);

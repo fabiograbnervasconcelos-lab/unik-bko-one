@@ -305,15 +305,45 @@ export function askCoberturaNumeroMessage(cep: string) {
 }
 
 export function askCoberturaEnderecoMessage(
-  options: Array<{ index: number; label: string }>,
+  options: Array<{ letter: string; label: string }>,
 ) {
-  const lines = options.map((opt) => `${opt.index}️⃣ ${opt.label}`);
+  const lines = options.map((opt) => `*${opt.letter}* — ${opt.label}`);
   return (
     `📡 *Escolha o endereço*\n\n` +
     `${lines.join("\n")}\n\n` +
-    `Responda com o *número* da opção.\n` +
+    `Responda com a *letra* da opção (ex.: *A* ou *B*).\n` +
+    `_Não use 1–8 — isso é do menu._\n` +
     `_Ou digite *menu* para voltar._`
   );
+}
+
+/** Converte A/B/C (ou 1/2/3 legado) no índice 0-based da lista. */
+export function parseCoberturaEnderecoPick(text: string, total: number): number | null {
+  const cleaned = text.trim().toUpperCase();
+  if (!cleaned || total < 1) return null;
+
+  const letterOnly = cleaned.match(/^([A-Z])(?:\b|[).:\-_]|$)/);
+  if (letterOnly) {
+    const index = letterOnly[1].charCodeAt(0) - 65;
+    if (index >= 0 && index < total) return index;
+  }
+
+  // Compat: ainda aceita 1/2… só dentro da cobertura (não no menu)
+  const digits = cleaned.replace(/\D/g, "");
+  if (/^\d{1,2}$/.test(digits)) {
+    const pick = Number(digits);
+    if (pick >= 1 && pick <= total) return pick - 1;
+  }
+  return null;
+}
+
+export function coberturaEnderecoOptions(
+  logradouros: Array<{ descricao?: string; tipoLogradouro?: string; nomeLogradouro?: string }>,
+) {
+  return logradouros.map((item, index) => ({
+    letter: String.fromCharCode(65 + index),
+    label: item.descricao || `${item.tipoLogradouro || ""} ${item.nomeLogradouro || ""}`.trim(),
+  }));
 }
 
 export function afterCoberturaMessage() {
