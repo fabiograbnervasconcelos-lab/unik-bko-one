@@ -108,35 +108,62 @@ function incomingText(message: WAMessage) {
   ).trim();
 }
 
+async function replyText(remoteJid: string, text: string) {
+  if (!runtime.socket || !text) return;
+  await runtime.socket.sendMessage(remoteJid, { text }).catch((error) => {
+    log("warn", `Falha ao responder WhatsApp (${remoteJid}): ${String(error)}`);
+  });
+}
+
 async function handleIncomingCommand(message: WAMessage) {
   if (message.key.fromMe) return;
   const remoteJid = message.key.remoteJid;
   if (!remoteJid) return;
-  if (!isOwnerDirectChat(remoteJid, message.key.participant)) return;
-  persistOwnerJid(remoteJid);
-  const text = incomingText(message);
-  if (!isValidateAndSendCommand(text)) return;
-  if (Date.now() - runtime.lastCommandAt < 8000) {
-    log("info", "Comando WhatsApp ignorado: já está rodando um validar e enviar.");
+  // Só conversa 1:1 — ignora grupos e broadcast
+  if (remoteJid.endsWith("@g.us") || remoteJid.endsWith("@broadcast") || remoteJid === "status@broadcast") {
     return;
   }
-  runtime.lastCommandAt = Date.now();
-  log("info", `Comando WhatsApp recebido de ${remoteJid}: ${text}`);
-  try {
-    await runtime.socket?.sendMessage(remoteJid, {
-      text: "Unik BKO: recebi *validar e enviar*. Vou consultar e mandar o que estiver na fila.",
-    });
-  } catch {
-    // ignore reply failure
+
+  const text = incomingText(message);
+  if (!text) return;
+
+  // Owner: mantém o comando BKO "validar e enviar"
+  if (isOwnerDirectChat(remoteJid, message.key.participant) && isValidateAndSendCommand(text)) {
+    persistOwnerJid(remoteJid);
+    if (Date.now() - runtime.lastCommandAt < 8000) {
+      log("info", "Comando WhatsApp ignorado: já está rodando um validar e enviar.");
+      return;
+    }
+    runtime.lastCommandAt = Date.now();
+    log("info", `Comando WhatsApp recebido de ${remoteJid}: ${text}`);
+    await replyText(
+      remoteJid,
+      "Unik BKO: recebi *validar e enviar*. Vou consultar e mandar o que estiver na fila.",
+    );
+    const { startValidateAndSendFromWhatsApp } = await import("@/lib/pipeline");
+    try {
+      startValidateAndSendFromWhatsApp();
+    } catch (error) {
+      const err = error instanceof Error ? error.message : String(error);
+      log("error", `Comando validar e enviar falhou: ${err}`);
+      await replyText(remoteJid, `Unik BKO: não consegui executar. ${err}`);
+    }
+    return;
   }
-  const { startValidateAndSendFromWhatsApp } = await import("@/lib/pipeline");
+
+  // Vendedores (e o dono, se não for o comando BKO): fluxo CRM por WhatsApp
+  log("info", `Mensagem vendedor de ${remoteJid}: ${text.slice(0, 40)}`);
   try {
-    startValidateAndSendFromWhatsApp();
+    const { handleVendorMessage } = await import("@/lib/vendor-bot");
+    const replies = await handleVendorMessage(remoteJid, text);
+    for (const reply of replies) {
+      await replyText(remoteJid, reply);
+    }
   } catch (error) {
-    const err = error instanceof Error ? error.message : String(error);
-    log("error", `Comando validar e enviar falhou: ${err}`);
-    await runtime.socket?.sendMessage(remoteJid, { text: `Unik BKO: não consegui executar. ${err}` }).catch(
-      () => undefined,
+    log("error", `Bot vendedor falhou: ${String(error)}`);
+    await replyText(
+      remoteJid,
+      "❌ Deu erro interno. Pode tentar novamente em instantes?",
     );
   }
 }

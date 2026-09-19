@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { loadSettings } from "@/lib/settings";
 import { getSnapshot } from "@/lib/store";
+import { listVendorSessions, vendorSessionCount } from "@/lib/vendor-session";
 
 export const dynamic = "force-dynamic";
 
@@ -12,5 +13,9 @@ export async function GET() {
     qrDataUrl: undefined,
     hasQr: Boolean(snapshot.qrDataUrl),
     settings,
+    vendorBot: {
+      loggedIn: vendorSessionCount(),
+      sessions: listVendorSessions(),
+    },
   });
 }

@@ -18,7 +18,16 @@ import type { AppSnapshot, LeadResult, LogLine, WhatsAppGroup } from "@/lib/stor
 import type { AppSettings } from "@/lib/settings";
 import { isPendingWhatsApp } from "@/lib/message";
 
-type StatusPayload = AppSnapshot & { settings: AppSettings; hasQr?: boolean };
+type VendorBotStatus = {
+  loggedIn: number;
+  sessions: { jid: string; phase: string; crmUser: string | null; busy: boolean }[];
+};
+
+type StatusPayload = AppSnapshot & {
+  settings: AppSettings;
+  hasQr?: boolean;
+  vendorBot?: VendorBotStatus;
+};
 
 const EMPTY_RESULTS: LeadResult[] = [];
 
@@ -365,7 +374,8 @@ export function Dashboard() {
             <CardTitle>1. WhatsApp — leia o QR aqui</CardTitle>
             <CardDescription>
               No celular: WhatsApp → Aparelhos conectados → Conectar um aparelho. O QR
-              atualiza sozinho.
+              atualiza sozinho. Com a sessão ativa, qualquer vendedor pode mandar mensagem
+              neste número: o bot pede login/senha do CRM e consulta só a aba NIO.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -374,6 +384,9 @@ export function Dashboard() {
                 <div className="space-y-2 text-center text-zinc-800">
                   <p className="text-lg font-semibold">Sessão ativa</p>
                   <p className="text-sm">Pode rodar a verificação. Não precisa escanear de novo.</p>
+                  <p className="text-sm text-zinc-600">
+                    Bot vendedores: {snapshot?.vendorBot?.loggedIn ?? 0} logado(s) no CRM
+                  </p>
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-3">

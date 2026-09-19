@@ -13,6 +13,25 @@ O sistema:
 7. O botão **Validar e enviar** do painel continua valendo. O mesmo comando no WhatsApp (`validar e enviar`, enviado do 48 99194-0908) dispara a fila ou uma consulta nova.
 8. **Zerar CRM e GED** limpa a consulta, os prints e desloga os dois sistemas. **Não desconecta o WhatsApp.**
 
+## Bot WhatsApp para vendedores
+
+Com o QR do painel logado, **qualquer vendedor** pode mandar mensagem no número da sessão:
+
+1. O bot pede **usuário e senha** do CRM (cada um usa a própria conta).
+2. Se o login der certo, responde **Logado** e envia o menu. Se falhar, avisa e pede para tentar de novo.
+3. Opções (só **aba NIO**, sem Tim Fibra):
+   - `(1)` Instalados (nome + OS, mês vigente + quantidade)
+   - `(2)` Agendados (mês vigente + quantidade)
+   - `(3)` Tratar quebra / Quebra em tratamento (quantidade)
+   - `(4)` Cancelados do mês (quantidade)
+   - `(5)` Ag. biometria (quantidade)
+   - `(6)` Faturas clientes (em breve)
+   - `(7)` Encerrar e deslogar do CRM
+4. Depois de cada busca, pergunta se precisa de mais alguma informação.
+5. Se ainda estiver logado e mandar outra mensagem, o menu volta. Se encerrou (7) ou a sessão caiu, começa do zero.
+
+A busca usa **Histórico NIO** (instalados/agendados/quebra/cancelados) e **Pré-venda NIO** (ag. biometria) com o filtro rápido da tabela — mais rápido que baixar Excel de 60 dias.
+
 Se o GED não mostrar Resultado da Análise, **não monta mensagem**.
 
 ## Como rodar
