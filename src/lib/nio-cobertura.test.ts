@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseCepInput, parseHouseNumberInput } from "./nio-cobertura.ts";
-import { menuMessage, optionFromText } from "./vendor-helpers.ts";
+import {
+  askCoberturaEnderecoMessage,
+  coberturaEnderecoOptions,
+  menuMessage,
+  optionFromText,
+  parseCoberturaEnderecoPick,
+} from "./vendor-helpers.ts";
 
 test("menu tem cobertura na 7 e encerrar na 8", () => {
   const menu = menuMessage("Elisangela");
@@ -27,4 +33,20 @@ test("parseHouseNumberInput", () => {
   assert.equal(parseHouseNumberInput("369"), "369");
   assert.equal(parseHouseNumberInput("SN"), "SN");
   assert.equal(parseHouseNumberInput("sem número"), "SN");
+});
+
+test("escolha de endereço usa letras A/B e não conflita com menu 1", () => {
+  assert.equal(parseCoberturaEnderecoPick("A", 2), 0);
+  assert.equal(parseCoberturaEnderecoPick("b", 2), 1);
+  assert.equal(parseCoberturaEnderecoPick("1", 2), 0);
+  assert.equal(optionFromText("1"), "instalados");
+  const msg = askCoberturaEnderecoMessage(
+    coberturaEnderecoOptions([
+      { descricao: "Rua Um 369" },
+      { descricao: "Rua Dois 369" },
+    ]),
+  );
+  assert.match(msg, /\*A\* — Rua Um 369/);
+  assert.match(msg, /\*B\* — Rua Dois 369/);
+  assert.doesNotMatch(msg, /1️⃣/);
 });
