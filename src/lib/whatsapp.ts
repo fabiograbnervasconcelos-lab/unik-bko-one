@@ -135,16 +135,41 @@ async function replyPdf(
 }
 
 async function handleIncomingCommand(message: WAMessage) {
-  if (message.key.fromMe) return;
+  // #region agent log
+  const { dbgFatura } = await import("@/lib/debug-fatura");
+  // #endregion
+  if (message.key.fromMe) {
+    // #region agent log
+    const preview = incomingText(message).slice(0, 40);
+    if (preview && (/^[1-7]\b/i.test(preview) || /fatura|cpf|\d{11}/i.test(preview))) {
+      dbgFatura("E", "whatsapp.ts:fromMe", "Ignored fromMe message that looks like vendor command", {
+        remoteJid: message.key.remoteJid ?? null,
+        preview,
+      });
+    }
+    // #endregion
+    return;
+  }
   const remoteJid = message.key.remoteJid;
   if (!remoteJid) return;
   // Só conversa 1:1 — ignora grupos e broadcast
   if (remoteJid.endsWith("@g.us") || remoteJid.endsWith("@broadcast") || remoteJid === "status@broadcast") {
+    // #region agent log
+    dbgFatura("E", "whatsapp.ts:group", "Ignored group/broadcast", { remoteJid });
+    // #endregion
     return;
   }
 
   const text = incomingText(message);
-  if (!text) return;
+  if (!text) {
+    // #region agent log
+    dbgFatura("E", "whatsapp.ts:emptyText", "Incoming DM with no extractable text", {
+      remoteJid,
+      msgKeys: message.message ? Object.keys(message.message) : [],
+    });
+    // #endregion
+    return;
+  }
 
   // Owner: mantém o comando BKO "validar e enviar"
   if (isOwnerDirectChat(remoteJid, message.key.participant) && isValidateAndSendCommand(text)) {
@@ -172,18 +197,47 @@ async function handleIncomingCommand(message: WAMessage) {
 
   // Vendedores (e o dono, se não for o comando BKO): fluxo CRM por WhatsApp
   log("info", `Mensagem vendedor de ${remoteJid}: ${text.slice(0, 40)}`);
+  // #region agent log
+  dbgFatura("E", "whatsapp.ts:vendorIn", "Vendor DM received", {
+    remoteJid,
+    isLid: remoteJid.endsWith("@lid"),
+    textPreview: text.slice(0, 60),
+  });
+  // #endregion
   try {
     const { handleVendorMessage } = await import("@/lib/vendor-bot");
     const replies = await handleVendorMessage(remoteJid, text);
+    // #region agent log
+    dbgFatura("E", "whatsapp.ts:vendorOut", "Vendor replies ready", {
+      remoteJid,
+      count: replies.length,
+      kinds: replies.map((r) => r.kind),
+      firstTextPreview:
+        replies[0] && replies[0].kind === "text" ? replies[0].text.slice(0, 80) : null,
+    });
+    // #endregion
     for (const reply of replies) {
       if (reply.kind === "text") {
         await replyText(remoteJid, reply.text);
       } else if (reply.kind === "pdf") {
+        // #region agent log
+        dbgFatura("D", "whatsapp.ts:sendPdf", "Sending PDF reply", {
+          remoteJid,
+          fileName: reply.fileName,
+          bytes: reply.data.length,
+        });
+        // #endregion
         await replyPdf(remoteJid, reply.data, reply.fileName, reply.caption);
       }
     }
   } catch (error) {
     log("error", `Bot vendedor falhou: ${String(error)}`);
+    // #region agent log
+    dbgFatura("E", "whatsapp.ts:vendorErr", "Vendor handler threw", {
+      remoteJid,
+      error: String(error),
+    });
+    // #endregion
     await replyText(
       remoteJid,
       "❌ Deu erro interno. Pode tentar novamente em instantes?",

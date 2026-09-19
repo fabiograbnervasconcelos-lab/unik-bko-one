@@ -15,6 +15,7 @@ export async function GET() {
     shortSha: sha.slice(0, 12),
     faturaOpcao6: true,
     askCpfOnOption6: true,
+    debugFatura: true,
     timezone: "America/Sao_Paulo",
     builtAt: new Date().toISOString(),
   });

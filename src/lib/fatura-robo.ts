@@ -1,4 +1,5 @@
 import { log } from "@/lib/store";
+import { dbgFatura } from "@/lib/debug-fatura";
 
 const ROBO_BASE =
   process.env.FATURA_ROBO_URL?.replace(/\/$/, "") ||
@@ -40,6 +41,12 @@ function absoluteUrl(pathOrUrl: string) {
 export async function consultarFaturaPorDoc(docDigits: string): Promise<FaturaLookup> {
   const url = `${ROBO_BASE}/api/consulta?doc=${encodeURIComponent(docDigits)}`;
   log("info", `Fatura Robô One: consultando ${docDigits.slice(0, 3)}***`);
+  // #region agent log
+  dbgFatura("C", "fatura-robo.ts:consulta:start", "Calling Robô One consulta", {
+    base: ROBO_BASE,
+    docLen: docDigits.length,
+  });
+  // #endregion
   const response = await fetch(url, {
     method: "GET",
     headers: { Accept: "application/json" },
@@ -60,6 +67,18 @@ export async function consultarFaturaPorDoc(docDigits: string): Promise<FaturaLo
     message?: string;
     error?: string;
   } | null;
+
+  // #region agent log
+  dbgFatura("C", "fatura-robo.ts:consulta:raw", "Robô One raw response", {
+    httpStatus: response.status,
+    ok: data?.ok ?? null,
+    hasLookup: Boolean(data?.lookup),
+    invoiceCount: data?.lookup?.invoices?.length ?? 0,
+    topKeys: data ? Object.keys(data) : [],
+    lookupKeys: data?.lookup ? Object.keys(data.lookup) : [],
+    error: data?.error ?? null,
+  });
+  // #endregion
 
   if (!response.ok || !data) {
     throw new Error(data?.error || data?.message || `Falha HTTP ${response.status} na consulta de fatura.`);

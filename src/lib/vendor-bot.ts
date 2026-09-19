@@ -15,6 +15,7 @@ import {
   parseCredentials,
   parseDocumentInput,
 } from "@/lib/vendor-helpers";
+import { dbgFatura } from "@/lib/debug-fatura";
 import {
   destroyVendorSession,
   getVendorPage,
@@ -58,12 +59,30 @@ async function tryLogin(jid: string, user: string, pass: string): Promise<Vendor
 
 async function runFaturaLookup(jid: string, docDigits: string): Promise<VendorOutgoing[]> {
   const session = getVendorSession(jid);
+  // #region agent log
+  dbgFatura("C", "vendor-bot.ts:runFaturaLookup:entry", "Starting fatura lookup", {
+    jid,
+    docLen: docDigits.length,
+    phase: session.phase,
+    hasCrmUser: Boolean(session.crmUser),
+    hasPage: Boolean(session.page),
+  });
+  // #endregion
   session.busy = true;
   const outgoing: VendorOutgoing[] = texts("⏳ Consultando fatura no Robô One Telecom…");
   try {
     const lookup = await consultarFaturaPorDoc(docDigits);
     const queriedAt = formatQueryTimestamp();
     const masked = lookup.maskedDocument || lookup.document?.formatted || docDigits;
+    // #region agent log
+    dbgFatura("C", "vendor-bot.ts:runFaturaLookup:ok", "Fatura lookup response mapped", {
+      ok: lookup.ok,
+      invoiceCount: lookup.invoices.length,
+      hasCustomerName: Boolean(lookup.customerName),
+      source: lookup.source,
+      message: lookup.message?.slice(0, 120) ?? null,
+    });
+    // #endregion
     outgoing.push({
       kind: "text",
       text: formatFaturaText({
@@ -76,6 +95,15 @@ async function runFaturaLookup(jid: string, docDigits: string): Promise<VendorOu
 
     for (const [index, invoice] of lookup.invoices.entries()) {
       const pdf = await baixarBoletoPdf(invoice);
+      // #region agent log
+      dbgFatura("D", "vendor-bot.ts:runFaturaLookup:pdf", "PDF download attempt", {
+        index,
+        hasPdf: Boolean(pdf),
+        pdfUrl: invoice.pdfUrl ? "set" : null,
+        customerId: invoice.customerId ? "set" : null,
+        bytes: pdf?.buffer.length ?? 0,
+      });
+      // #endregion
       if (!pdf) continue;
       outgoing.push({
         kind: "pdf",
@@ -90,6 +118,11 @@ async function runFaturaLookup(jid: string, docDigits: string): Promise<VendorOu
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log("error", `Fatura Robô One falhou: ${message}`);
+    // #region agent log
+    dbgFatura("C", "vendor-bot.ts:runFaturaLookup:err", "Fatura lookup threw", {
+      message: message.slice(0, 200),
+    });
+    // #endregion
     setVendorPhase(jid, "awaiting_cpf", { busy: false });
     outgoing.push({
       kind: "text",
@@ -115,6 +148,14 @@ async function runOption(jid: string, kind: VendorQueryKind | "encerrar"): Promi
   }
 
   if (kind === "faturas") {
+    // #region agent log
+    dbgFatura("A", "vendor-bot.ts:runOption:faturas", "Option 6 selected — asking CPF", {
+      jid,
+      phase: getVendorSession(jid).phase,
+      hasCrmUser: Boolean(getVendorSession(jid).crmUser),
+      hasPage: Boolean(getVendorSession(jid).page),
+    });
+    // #endregion
     setVendorPhase(jid, "awaiting_cpf");
     return texts(askCpfFaturaMessage());
   }
@@ -161,12 +202,31 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
   if (!raw) return [];
 
   const session = getVendorSession(jid);
+  // #region agent log
+  dbgFatura("A", "vendor-bot.ts:handleVendorMessage:entry", "Vendor message state", {
+    jid,
+    phase: session.phase,
+    hasCrmUser: Boolean(session.crmUser),
+    hasPage: Boolean(session.page),
+    busy: session.busy,
+    option: optionFromText(raw),
+    docLen: parseDocumentInput(raw)?.length ?? 0,
+    textPreview: raw.slice(0, 40),
+  });
+  // #endregion
   if (session.busy) {
     return texts("⏳ Estou consultando agora. Só um instante…");
   }
 
   // Aguardando CPF da fatura (mantém CRM logado)
   if (session.phase === "awaiting_cpf" && session.crmUser) {
+    // #region agent log
+    dbgFatura("B", "vendor-bot.ts:awaiting_cpf", "In awaiting_cpf branch", {
+      hasPage: Boolean(session.page),
+      option: optionFromText(raw),
+      docLen: parseDocumentInput(raw)?.length ?? 0,
+    });
+    // #endregion
     const option = optionFromText(raw);
     if (option) return runOption(jid, option);
     const doc = parseDocumentInput(raw);
@@ -188,6 +248,19 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
     return runOption(jid, option);
   }
 
+  // #region agent log
+  if (
+    (session.phase === "menu" || session.phase === "awaiting_cpf") &&
+    session.crmUser &&
+    !session.page
+  ) {
+    dbgFatura("B", "vendor-bot.ts:menuNoPage", "Logged crmUser but page missing — cannot reach option 6 menu path", {
+      phase: session.phase,
+      option: optionFromText(raw),
+    });
+  }
+  // #endregion
+
   if (session.phase === "awaiting_pass" && session.pendingUser) {
     const pass = raw.replace(/^(?:senha|password|pass)\s*[:=]\s*/i, "").trim();
     if (!pass) return texts(askPasswordMessage(session.pendingUser));
@@ -197,6 +270,11 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
   }
 
   if (session.phase === "need_login") {
+    // #region agent log
+    dbgFatura("A", "vendor-bot.ts:need_login", "Session not logged in — asking CRM user", {
+      option: optionFromText(raw),
+    });
+    // #endregion
     setVendorPhase(jid, "awaiting_user");
     return texts(askUserOnlyMessage());
   }
@@ -216,6 +294,14 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
     return texts(askUserOnlyMessage());
   }
 
+  // #region agent log
+  dbgFatura("A", "vendor-bot.ts:fallback_need_login", "Falling through to need_login", {
+    phase: session.phase,
+    hasCrmUser: Boolean(session.crmUser),
+    hasPage: Boolean(session.page),
+    option: optionFromText(raw),
+  });
+  // #endregion
   setVendorPhase(jid, "need_login");
   return texts(askUserOnlyMessage());
 }
