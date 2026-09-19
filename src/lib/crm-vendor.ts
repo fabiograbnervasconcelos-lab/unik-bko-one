@@ -2,13 +2,10 @@ import type { Page } from "playwright";
 import { clickFirst, fillFirst, screenshot, visibleText } from "@/lib/browser";
 import { log } from "@/lib/store";
 import {
+  buildRowFromText,
   currentMonthParts,
-  detectStatus,
-  extractDates,
-  extractOs,
   filterRows,
-  guessVendorName,
-  pickDateForKind,
+  formatQueryTimestamp,
   type VendorCrmRow,
   type VendorQueryKind,
   type VendorQueryResult,
@@ -82,16 +79,8 @@ function parseRowsFromPageText(text: string, kind: VendorQueryKind): VendorCrmRo
   const blocks = chunks.length > 1 ? chunks : text.split(/\n{2,}/);
   const rows: VendorCrmRow[] = [];
   for (const block of blocks) {
-    const status = detectStatus(block);
-    if (!status) continue;
-    const dates = extractDates(block);
-    rows.push({
-      name: guessVendorName(block),
-      os: extractOs(block),
-      status,
-      date: pickDateForKind(kind, dates),
-      raw: block.trim().slice(0, 400),
-    });
+    const row = buildRowFromText(block, kind);
+    if (row) rows.push(row);
   }
   return rows;
 }
@@ -106,20 +95,8 @@ async function extractTableRows(page: Page, kind: VendorQueryKind): Promise<Vend
     if (!rowText.trim() || /nenhum (dado|registro)/i.test(rowText)) continue;
     const cells = await row.locator("td").allInnerTexts().catch(() => [] as string[]);
     const joined = cells.length ? cells.map((cell) => cell.trim()).filter(Boolean).join("\n") : rowText;
-    const status = detectStatus(joined) ?? detectStatus(rowText);
-    if (!status) continue;
-    const dates = extractDates(joined);
-    const fromCells = cells.length
-      ? cells.map((cell) => cell.trim()).filter((cell) => /^\d{2}\/\d{2}\/\d{4}/.test(cell))
-      : [];
-    const allDates = fromCells.length ? fromCells.map((cell) => cell.slice(0, 10)) : dates;
-    found.push({
-      name: guessVendorName(joined),
-      os: extractOs(joined) ?? extractOs(rowText),
-      status,
-      date: pickDateForKind(kind, allDates),
-      raw: rowText.trim().slice(0, 400),
-    });
+    const parsed = buildRowFromText(joined, kind) ?? buildRowFromText(rowText, kind);
+    if (parsed) found.push(parsed);
   }
   if (found.length) return found;
   return parseRowsFromPageText(await visibleText(page), kind);
@@ -137,10 +114,10 @@ async function collectBySearch(page: Page, url: string, search: string, kind: Ve
 
   const all: VendorCrmRow[] = [];
   const seen = new Set<string>();
-  for (let pageIndex = 0; pageIndex < 25; pageIndex += 1) {
+  for (let pageIndex = 0; pageIndex < 40; pageIndex += 1) {
     const batch = await extractTableRows(page, kind);
     for (const row of batch) {
-      const key = `${row.name}|${row.os ?? ""}|${row.status}|${row.date ?? ""}`;
+      const key = `${row.cpf ?? ""}|${row.os ?? ""}|${row.name}|${row.status}|${row.agenda ?? ""}`;
       if (seen.has(key)) continue;
       seen.add(key);
       all.push(row);
@@ -161,7 +138,6 @@ export async function loginCrmAsVendor(page: Page, user: string, pass: string) {
   ]);
   await page.waitForTimeout(2500);
 
-  // SweetAlert "Acesso Negado" / "Dados Incorretos"
   const denied = page.locator(".sweet-alert, .swal2-popup, .sa-error").first();
   if (await denied.isVisible().catch(() => false)) {
     const deniedText = (await denied.innerText().catch(() => "")) || "";
@@ -174,7 +150,6 @@ export async function loginCrmAsVendor(page: Page, user: string, pass: string) {
     throw new Error("CRM_LOGIN_DENIED");
   }
 
-  // Confirma sessão entrando no Histórico NIO
   await page.goto(CRM_NIO_HISTORICO, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => undefined);
   await page.waitForTimeout(1200);
   if (page.url().includes("login.php")) {
@@ -194,44 +169,48 @@ export async function logoutCrmPage(page: Page) {
   }
 }
 
+function withMeta(
+  kind: VendorQueryKind,
+  title: string,
+  rows: VendorCrmRow[],
+  monthLabel: string | null,
+  note?: string,
+): VendorQueryResult {
+  return {
+    kind,
+    title,
+    count: rows.length,
+    rows,
+    monthLabel,
+    note,
+    queriedAt: formatQueryTimestamp(),
+  };
+}
+
 export async function runVendorCrmQuery(page: Page, kind: VendorQueryKind): Promise<VendorQueryResult> {
   const { label } = currentMonthParts();
 
   if (kind === "faturas") {
-    return {
-      kind,
-      title: "Faturas de clientes",
-      count: 0,
-      rows: [],
-      monthLabel: null,
-      note: "Em breve — ainda vamos montar a busca de faturas.",
-    };
+    return withMeta(kind, "Faturas de clientes", [], null, "Em breve — ainda vamos montar a busca de faturas.");
   }
-
   if (kind === "instalados") {
-    const rows = await collectBySearch(page, CRM_NIO_HISTORICO, "instalado", kind);
-    return { kind, title: "Instalados", count: rows.length, rows, monthLabel: label };
+    return withMeta(kind, "Instalados", await collectBySearch(page, CRM_NIO_HISTORICO, "instalado", kind), label);
   }
   if (kind === "agendados") {
-    const rows = await collectBySearch(page, CRM_NIO_HISTORICO, "agendado", kind);
-    return { kind, title: "Agendados", count: rows.length, rows, monthLabel: label };
+    return withMeta(kind, "Agendados", await collectBySearch(page, CRM_NIO_HISTORICO, "agendado", kind), label);
   }
   if (kind === "quebra") {
-    const rows = await collectBySearch(page, CRM_NIO_HISTORICO, "quebra", kind);
-    return {
+    return withMeta(
       kind,
-      title: "Tratar quebra / Quebra em tratamento",
-      count: rows.length,
-      rows,
-      monthLabel: null,
-    };
+      "Tratar quebra / Quebra em tratamento",
+      await collectBySearch(page, CRM_NIO_HISTORICO, "quebra", kind),
+      null,
+    );
   }
   if (kind === "cancelados") {
-    const rows = await collectBySearch(page, CRM_NIO_HISTORICO, "cancelado", kind);
-    return { kind, title: "Cancelados", count: rows.length, rows, monthLabel: label };
+    return withMeta(kind, "Cancelados", await collectBySearch(page, CRM_NIO_HISTORICO, "cancelado", kind), label);
   }
-  const rows = await collectBySearch(page, CRM_NIO_PREVENDA, "biometria", kind);
-  return { kind, title: "Ag. biometria", count: rows.length, rows, monthLabel: null };
+  return withMeta(kind, "Ag. biometria", await collectBySearch(page, CRM_NIO_PREVENDA, "biometria", kind), null);
 }
 
 export { parseCredentials } from "@/lib/vendor-helpers";

@@ -10,6 +10,12 @@ function normalizeText(value: string) {
     .toLowerCase();
 }
 
+function formatCpfDigits(raw: string) {
+  const digits = raw.replace(/\D/g, "").padStart(11, "0").slice(-11);
+  if (digits.length !== 11) return raw.trim();
+  return digits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+}
+
 export type VendorQueryKind =
   | "instalados"
   | "agendados"
@@ -21,7 +27,12 @@ export type VendorQueryKind =
 export type VendorCrmRow = {
   name: string;
   os: string | null;
+  cpf: string | null;
   status: string;
+  /** Ex.: 19/09/2026 (Manhã) */
+  agenda: string | null;
+  /** Só a data DD/MM/YYYY para filtrar mês */
+  agendaDate: string | null;
   date: string | null;
   raw: string;
 };
@@ -33,11 +44,14 @@ export type VendorQueryResult = {
   rows: VendorCrmRow[];
   monthLabel: string | null;
   note?: string;
+  queriedAt: string;
 };
 
 const DATE_RE = /\b(\d{2}\/\d{2}\/\d{4})\b/g;
-const OS_RE = /#\s*(\d{3,})|\bOS[:\s#-]*(\d{3,})\b/i;
-const MAX_ROWS_IN_REPLY = 40;
+const AGENDA_RE = /Agen\.?\s*:\s*(\d{2}\/\d{2}\/\d{4})\s*(\([^)]+\))?/i;
+const OS_LABEL_RE = /\bOS\s*:\s*(\d{3,})\b/i;
+/** WhatsApp costuma cortar ~4k; fatiamos com folga. */
+const MAX_MESSAGE_CHARS = 3500;
 
 export function currentMonthParts(now = new Date()) {
   const month = now.getMonth() + 1;
@@ -49,6 +63,12 @@ export function currentMonthParts(now = new Date()) {
     mm: String(month).padStart(2, "0"),
     yyyy: String(year),
   };
+}
+
+export function formatQueryTimestamp(now = new Date()) {
+  const date = now.toLocaleDateString("pt-BR");
+  const time = now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  return `${date} às ${time}`;
 }
 
 export function parseBrDate(value: string | null | undefined) {
@@ -69,10 +89,25 @@ export function dateInCurrentMonth(value: string | null | undefined, now = new D
   return parsed.month === month && parsed.year === year;
 }
 
+/** Preferência: "OS: 11194391" — nunca o #id da venda. */
 export function extractOs(rowText: string) {
-  const match = rowText.match(OS_RE);
-  if (!match) return null;
-  return match[1] || match[2] || null;
+  const labeled = rowText.match(OS_LABEL_RE);
+  if (labeled?.[1]) return labeled[1];
+  return null;
+}
+
+export function extractAgenda(rowText: string): { full: string; date: string } | null {
+  const match = rowText.match(AGENDA_RE);
+  if (!match?.[1]) return null;
+  const period = match[2] ? ` ${match[2].trim()}` : "";
+  return { full: `${match[1]}${period}`, date: match[1] };
+}
+
+export function extractCpf(rowText: string) {
+  CPF_REGEX.lastIndex = 0;
+  const match = CPF_REGEX.exec(rowText);
+  if (!match?.[1]) return null;
+  return formatCpfDigits(match[1]);
 }
 
 export function extractDates(rowText: string) {
@@ -90,6 +125,9 @@ export function guessVendorName(rowText: string) {
     .filter((line) => !/^P\./i.test(line))
     .filter((line) => !/cep:|end\.|bairro:|class\.|plano:|pag:|venc/i.test(line))
     .filter((line) => !/instalado|agendado|cancelado|quebra|biometr/i.test(line))
+    .filter((line) => !/^OS\s*:/i.test(line))
+    .filter((line) => !/^Agen/i.test(line))
+    .filter((line) => !/^Venda\s*:/i.test(line))
     .filter((line) => /[a-zA-ZÀ-ú]{3,}/.test(line));
   return lines[0]?.slice(0, 80) || "Cliente";
 }
@@ -108,7 +146,8 @@ export function detectStatus(rowText: string): string | null {
   return null;
 }
 
-export function pickDateForKind(kind: VendorQueryKind, dates: string[]) {
+export function pickDateForKind(kind: VendorQueryKind, dates: string[], agendaDate: string | null) {
+  if (agendaDate) return agendaDate;
   if (!dates.length) return null;
   if (kind === "cancelados") return dates[dates.length - 1] ?? null;
   return dates[0] ?? null;
@@ -129,7 +168,7 @@ export function matchesWantedStatus(kind: VendorQueryKind, status: string) {
 export function uniqueRows(rows: VendorCrmRow[]) {
   const map = new Map<string, VendorCrmRow>();
   for (const row of rows) {
-    const key = `${normalizeText(row.name)}|${row.os ?? ""}|${normalizeText(row.status)}|${row.date ?? ""}`;
+    const key = `${row.cpf ?? ""}|${row.os ?? ""}|${normalizeText(row.name)}|${normalizeText(row.status)}|${row.agenda ?? row.date ?? ""}`;
     if (!map.has(key)) map.set(key, row);
   }
   return [...map.values()];
@@ -139,8 +178,9 @@ export function filterRows(kind: VendorQueryKind, rows: VendorCrmRow[], now = ne
   return uniqueRows(rows).filter((row) => {
     if (!matchesWantedStatus(kind, row.status)) return false;
     if (kind === "quebra" || kind === "biometria") return true;
-    if (!row.date) return true;
-    return dateInCurrentMonth(row.date, now);
+    const dateForMonth = row.agendaDate || row.date;
+    if (!dateForMonth) return true;
+    return dateInCurrentMonth(dateForMonth, now);
   });
 }
 
@@ -169,23 +209,27 @@ export function parseCredentials(text: string): { user: string; pass: string } |
   return null;
 }
 
-export function menuMessage(crmUser?: string | null) {
+export function consultationFooter(queriedAt = formatQueryTimestamp()) {
+  return `_Consulta realizada em ${queriedAt}_`;
+}
+
+export function menuMessage(crmUser?: string | null, queriedAt = formatQueryTimestamp()) {
   const who = crmUser ? `\nConta: *${crmUser}*` : "";
   return (
-    `*Menu CRM Unik (NIO)*${who}\n\n` +
-    `*(1)* Instalados — nome + OS _(mês vigente)_\n` +
-    `*(2)* Agendados _(mês vigente)_\n` +
-    `*(3)* Tratar quebra / Quebra em tratamento\n` +
-    `*(4)* Cancelados do mês\n` +
-    `*(5)* Ag. biometria\n` +
-    `*(6)* Faturas clientes _(em breve)_\n` +
-    `*(7)* Encerrar e deslogar\n\n` +
-    `_Consultas só na aba NIO (sem Tim Fibra)._`
+    `*Menu CRM ONE (NIO)*${who}\n\n` +
+    `1️⃣ Instalados — nome + OS _(mês vigente)_\n` +
+    `2️⃣ Agendados _(mês vigente)_\n` +
+    `3️⃣ Tratar quebra / Quebra em tratamento\n` +
+    `4️⃣ Cancelados do mês\n` +
+    `5️⃣ Ag. biometria\n` +
+    `6️⃣ Faturas clientes _(em breve)_\n` +
+    `7️⃣ Encerrar e deslogar\n\n` +
+    consultationFooter(queriedAt)
   );
 }
 
-export function loggedInMessage(crmUser: string) {
-  return `✅ *Logado*\nConta: *${crmUser}*\n\n${menuMessage(crmUser)}`;
+export function loggedInMessage(crmUser: string, queriedAt = formatQueryTimestamp()) {
+  return `✅ *Logado*\nConta: *${crmUser}*\n\n${menuMessage(crmUser, queriedAt)}`;
 }
 
 export function askLoginMessage() {
@@ -223,53 +267,89 @@ export function loginErrorMessage() {
   );
 }
 
-function formatRowLine(row: VendorCrmRow, index: number, kind: VendorQueryKind) {
-  const os = row.os ? ` — OS #${row.os}` : "";
-  const date = row.date ? ` · ${row.date}` : "";
-  if (kind === "quebra") {
-    return `${index}. *${row.name}*${os}\n   _${row.status}_${date}`;
+export function formatRowLine(row: VendorCrmRow, index: number, kind: VendorQueryKind) {
+  const lines = [`${index}. *${row.name}*`];
+  if (kind === "instalados" || kind === "agendados") {
+    if (row.agenda) lines.push(`   Agen.: ${row.agenda}`);
+    if (row.os) lines.push(`   OS: ${row.os}`);
+    if (row.cpf) lines.push(`   CPF: ${row.cpf}`);
+    return lines.join("\n");
   }
-  return `${index}. *${row.name}*${os}${date}`;
+  if (kind === "quebra") {
+    lines.push(`   _${row.status}_`);
+  }
+  if (row.agenda) lines.push(`   Agen.: ${row.agenda}`);
+  else if (row.date) lines.push(`   Data: ${row.date}`);
+  if (row.os) lines.push(`   OS: ${row.os}`);
+  if (row.cpf) lines.push(`   CPF: ${row.cpf}`);
+  return lines.join("\n");
 }
 
-export function formatQueryResult(result: VendorQueryResult) {
+/** Monta uma ou mais mensagens — envia *todos* os registros, sem “e mais N”. */
+export function formatQueryResultMessages(result: VendorQueryResult): string[] {
+  const queriedAt = result.queriedAt || formatQueryTimestamp();
+  const footer = consultationFooter(queriedAt);
+  const askMore =
+    `Precisa de mais alguma informação?\n` +
+    `Digite *1–6* para outra busca ou *7* para encerrar.`;
+
   if (result.kind === "faturas") {
-    return (
+    return [
       `📄 *Faturas de clientes*\n\n` +
-      `${result.note ?? "Em breve."}\n\n` +
-      `Precisa de mais alguma informação?\n` +
-      `Digite *1–6* para outra busca ou *7* para encerrar.`
-    );
+        `${result.note ?? "Em breve."}\n\n` +
+        `${askMore}\n\n` +
+        footer,
+    ];
   }
 
   const monthBit = result.monthLabel ? ` — ${result.monthLabel}` : "";
   const header = `📋 *${result.title}*${monthBit}\n*Quantidade: ${result.count}*`;
+
   if (!result.count) {
-    return (
-      `${header}\n\n` +
-      `Nenhum registro encontrado.\n\n` +
-      `Precisa de mais alguma informação?\n` +
-      `Digite *1–6* para outra busca ou *7* para encerrar.`
-    );
+    return [`${header}\n\nNenhum registro encontrado.\n\n${askMore}\n\n${footer}`];
   }
 
-  const shown = result.rows.slice(0, MAX_ROWS_IN_REPLY);
-  const lines = shown.map((row, index) => formatRowLine(row, index + 1, result.kind));
-  const extra =
-    result.count > shown.length
-      ? `\n… e mais *${result.count - shown.length}* registro(s).`
-      : "";
+  const lines = result.rows.map((row, index) => formatRowLine(row, index + 1, result.kind));
+  const messages: string[] = [];
+  let chunk = `${header}\n\n`;
 
-  return (
-    `${header}\n\n` +
-    `${lines.join("\n")}${extra}\n\n` +
-    `Precisa de mais alguma informação?\n` +
-    `Digite *1–6* para outra busca ou *7* para encerrar.`
-  );
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const candidate = `${chunk}${line}\n`;
+    if (candidate.length > MAX_MESSAGE_CHARS && chunk.trim() !== header) {
+      messages.push(chunk.trimEnd());
+      chunk = `📋 *${result.title}* _(cont.)_\n\n${line}\n`;
+    } else {
+      chunk = candidate;
+    }
+  }
+
+  const closing = `\n${askMore}\n\n${footer}`;
+  if ((chunk + closing).length > MAX_MESSAGE_CHARS + 200) {
+    messages.push(chunk.trimEnd());
+    messages.push(`${askMore}\n\n${footer}`);
+  } else {
+    messages.push(`${chunk.trimEnd()}\n${closing}`);
+  }
+  return messages;
+}
+
+/** Compat: uma string única (testes / preview). */
+export function formatQueryResult(result: VendorQueryResult) {
+  return formatQueryResultMessages(result).join("\n\n---\n\n");
 }
 
 export function optionFromText(text: string): VendorQueryKind | "encerrar" | null {
-  const cleaned = text.trim().toLowerCase();
+  const cleaned = text
+    .trim()
+    .toLowerCase()
+    .replace(/1️⃣/g, "1")
+    .replace(/2️⃣/g, "2")
+    .replace(/3️⃣/g, "3")
+    .replace(/4️⃣/g, "4")
+    .replace(/5️⃣/g, "5")
+    .replace(/6️⃣/g, "6")
+    .replace(/7️⃣/g, "7");
   if (!cleaned) return null;
   if (/^7\b/.test(cleaned) || /^(encerrar|sair|logout|deslogar)\b/.test(cleaned)) return "encerrar";
   if (/^1\b/.test(cleaned) || /^instalad/.test(cleaned)) return "instalados";
@@ -279,4 +359,21 @@ export function optionFromText(text: string): VendorQueryKind | "encerrar" | nul
   if (/^5\b/.test(cleaned) || /biometr/.test(cleaned)) return "biometria";
   if (/^6\b/.test(cleaned) || /fatura/.test(cleaned)) return "faturas";
   return null;
+}
+
+export function buildRowFromText(block: string, kind: VendorQueryKind): VendorCrmRow | null {
+  const status = detectStatus(block);
+  if (!status) return null;
+  const agenda = extractAgenda(block);
+  const dates = extractDates(block);
+  return {
+    name: guessVendorName(block),
+    os: extractOs(block),
+    cpf: extractCpf(block),
+    status,
+    agenda: agenda?.full ?? null,
+    agendaDate: agenda?.date ?? null,
+    date: pickDateForKind(kind, dates, agenda?.date ?? null),
+    raw: block.trim().slice(0, 500),
+  };
 }
