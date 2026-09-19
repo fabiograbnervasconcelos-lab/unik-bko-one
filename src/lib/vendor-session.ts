@@ -1,6 +1,7 @@
 import type { Browser, BrowserContext, Page } from "playwright";
 import { launchBrowser, newContext } from "@/lib/browser";
 import { loginCrmAsVendor, logoutCrmPage } from "@/lib/crm-vendor";
+import type { NioCoberturaState } from "@/lib/nio-cobertura";
 import { log } from "@/lib/store";
 
 export type VendorPhase =
@@ -9,6 +10,7 @@ export type VendorPhase =
   | "awaiting_pass"
   | "menu"
   | "awaiting_cpf"
+  | "awaiting_cobertura"
   | "busy";
 
 export type VendorSession = {
@@ -16,6 +18,7 @@ export type VendorSession = {
   phase: VendorPhase;
   crmUser: string | null;
   pendingUser: string | null;
+  cobertura: NioCoberturaState | null;
   browser: Browser | null;
   context: BrowserContext | null;
   page: Page | null;
@@ -46,6 +49,7 @@ function emptySession(jid: string): VendorSession {
     phase: "need_login",
     crmUser: null,
     pendingUser: null,
+    cobertura: null,
     browser: null,
     context: null,
     page: null,
@@ -87,6 +91,7 @@ function mergeVendorSessionState(target: VendorSession, source: VendorSession) {
     awaiting_pass: 2,
     busy: 3,
     awaiting_cpf: 4,
+    awaiting_cobertura: 4,
     menu: 5,
   };
   if ((rank[source.phase] ?? 0) > (rank[target.phase] ?? 0)) {

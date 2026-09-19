@@ -1,7 +1,18 @@
 import { baixarBoletoPdf, consultarFaturaPorDoc } from "@/lib/fatura-robo";
 import { runVendorCrmQuery, type VendorQueryKind } from "@/lib/crm-vendor";
+import {
+  confirmNioViability,
+  emptyCoberturaState,
+  parseCepInput,
+  parseHouseNumberInput,
+  startNioAddressLookup,
+} from "@/lib/nio-cobertura";
 import { log } from "@/lib/store";
 import {
+  afterCoberturaMessage,
+  askCoberturaCepMessage,
+  askCoberturaEnderecoMessage,
+  askCoberturaNumeroMessage,
   askCpfFaturaMessage,
   askPasswordMessage,
   askUserOnlyMessage,
@@ -39,6 +50,14 @@ function texts(...values: string[]): VendorOutgoing[] {
   return values.filter(Boolean).map((text) => ({ kind: "text" as const, text }));
 }
 
+function wantsMenu(text: string) {
+  return /^(menu|voltar|opcoes|opções)$/i.test(text.trim());
+}
+
+function wantsAnotherCobertura(text: string) {
+  return /^(sim|s|outra|outro|novo|nova|cobertura)$/i.test(text.trim());
+}
+
 async function tryLogin(jid: string, user: string, pass: string): Promise<VendorOutgoing[]> {
   const session = getVendorSession(jid);
   session.busy = true;
@@ -51,7 +70,6 @@ async function tryLogin(jid: string, user: string, pass: string): Promise<Vendor
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log("warn", `Login CRM vendedor falhou (${user}): ${message}`);
-    // Mantém o usuário: só pede a senha de novo
     setVendorPhase(jid, "awaiting_pass", {
       busy: false,
       crmUser: null,
@@ -129,13 +147,203 @@ async function runFaturaLookup(jid: string, docDigits: string): Promise<VendorOu
       text:
         `❌ Não consegui consultar a fatura agora.\n` +
         `${message}\n\n` +
-        `Envie o CPF novamente ou digite *1–5* / *7*.`,
+        `Envie o CPF novamente ou digite *1–7* / *8*.`,
     });
     return outgoing;
   } finally {
     const current = getVendorSession(jid);
     current.busy = false;
   }
+}
+
+function startCoberturaFlow(jid: string): VendorOutgoing[] {
+  setVendorPhase(jid, "awaiting_cobertura", {
+    cobertura: emptyCoberturaState(),
+  });
+  return texts(askCoberturaCepMessage());
+}
+
+async function lookupCoberturaAddresses(jid: string, cep: string, numero: string) {
+  const session = getVendorSession(jid);
+  session.busy = true;
+  const outgoing = texts(`⏳ Consultando cobertura no site da Nio para CEP *${cep}* nº *${numero}*…`);
+  try {
+    const result = await startNioAddressLookup(cep, numero);
+    if (!result.logradouros.length) {
+      setVendorPhase(jid, "awaiting_cobertura", {
+        busy: false,
+        cobertura: {
+          step: "done",
+          cep,
+          numero,
+          hash: result.hash,
+          logradouros: [],
+        },
+      });
+      outgoing.push({
+        kind: "text",
+        text:
+          `❌ Não encontrei endereço para esse CEP/número no site da Nio.\n\n` +
+          afterCoberturaMessage(),
+      });
+      return outgoing;
+    }
+
+    setVendorPhase(jid, "awaiting_cobertura", {
+      busy: false,
+      cobertura: {
+        step: "endereco",
+        cep,
+        numero,
+        hash: result.hash,
+        logradouros: result.logradouros,
+      },
+    });
+    outgoing.push({
+      kind: "text",
+      text: askCoberturaEnderecoMessage(
+        result.logradouros.map((item, index) => ({
+          index: index + 1,
+          label: item.descricao || `${item.tipoLogradouro || ""} ${item.nomeLogradouro || ""}`.trim(),
+        })),
+      ),
+    });
+    return outgoing;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log("error", `Cobertura Nio falhou no endereço: ${message}`);
+    setVendorPhase(jid, "awaiting_cobertura", {
+      busy: false,
+      cobertura: { ...emptyCoberturaState(), step: "cep" },
+    });
+    outgoing.push({
+      kind: "text",
+      text:
+        `❌ Não consegui consultar o endereço na Nio agora.\n` +
+        `Tente de novo com o *CEP*.\n\n` +
+        askCoberturaCepMessage(),
+    });
+    return outgoing;
+  } finally {
+    getVendorSession(jid).busy = false;
+  }
+}
+
+async function finishCoberturaSelection(jid: string, addressIndex: number) {
+  const session = getVendorSession(jid);
+  const cobertura = session.cobertura;
+  if (!cobertura?.hash || !cobertura.logradouros[addressIndex]) {
+    return texts(askCoberturaCepMessage());
+  }
+  const chosen = cobertura.logradouros[addressIndex];
+  session.busy = true;
+  const outgoing = texts(`⏳ Confirmando viabilidade em:\n*${chosen.descricao}*`);
+  try {
+    const viability = await confirmNioViability({
+      hash: cobertura.hash,
+      addressId: chosen.addressId,
+      numero: cobertura.numero || "0",
+    });
+    setVendorPhase(jid, "awaiting_cobertura", {
+      busy: false,
+      cobertura: { ...cobertura, step: "done" },
+    });
+    if (viability.viavel) {
+      const bits = [
+        `✅ *Tem Nio Fibra no seu endereço.*`,
+        ``,
+        `📍 ${chosen.descricao}`,
+      ];
+      if (viability.description) bits.push(viability.description);
+      if (viability.maxBandwidth) {
+        bits.push(`Velocidade estimada até *${viability.maxBandwidth} Mbps*`);
+      }
+      bits.push("", afterCoberturaMessage());
+      outgoing.push({ kind: "text", text: bits.join("\n") });
+    } else {
+      const bits = [
+        `❌ *Não tem Nio Fibra no seu endereço.*`,
+        ``,
+        `📍 ${chosen.descricao}`,
+      ];
+      if (viability.description) bits.push(viability.description);
+      bits.push("", afterCoberturaMessage());
+      outgoing.push({ kind: "text", text: bits.join("\n") });
+    }
+    return outgoing;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log("error", `Cobertura Nio viabilidade falhou: ${message}`);
+    setVendorPhase(jid, "awaiting_cobertura", {
+      busy: false,
+      cobertura: { ...cobertura, step: "done" },
+    });
+    outgoing.push({
+      kind: "text",
+      text:
+        `❌ Não consegui confirmar a viabilidade nesse endereço.\n\n` +
+        afterCoberturaMessage(),
+    });
+    return outgoing;
+  } finally {
+    getVendorSession(jid).busy = false;
+  }
+}
+
+async function handleCoberturaMessage(jid: string, raw: string): Promise<VendorOutgoing[]> {
+  const session = getVendorSession(jid);
+  const option = optionFromText(raw);
+  if (option === "encerrar") return runOption(jid, "encerrar");
+  if (option && option !== "cobertura") {
+    setVendorPhase(jid, "menu", { cobertura: null });
+    return runOption(jid, option);
+  }
+  if (wantsMenu(raw)) {
+    setVendorPhase(jid, "menu", { cobertura: null });
+    return texts(menuMessage(session.crmUser));
+  }
+
+  const cobertura = session.cobertura || emptyCoberturaState();
+
+  if (cobertura.step === "done") {
+    if (wantsAnotherCobertura(raw) || option === "cobertura") {
+      return startCoberturaFlow(jid);
+    }
+    setVendorPhase(jid, "menu", { cobertura: null });
+    return texts(menuMessage(session.crmUser));
+  }
+
+  if (cobertura.step === "cep") {
+    const cep = parseCepInput(raw);
+    if (!cep) return texts(askCoberturaCepMessage());
+    setVendorPhase(jid, "awaiting_cobertura", {
+      cobertura: { ...cobertura, step: "numero", cep },
+    });
+    return texts(askCoberturaNumeroMessage(cep));
+  }
+
+  if (cobertura.step === "numero") {
+    const numero = parseHouseNumberInput(raw);
+    if (!numero) return texts(askCoberturaNumeroMessage(cobertura.cep || ""));
+    return lookupCoberturaAddresses(jid, cobertura.cep || "", numero);
+  }
+
+  if (cobertura.step === "endereco") {
+    const pick = Number(raw.replace(/\D/g, ""));
+    if (!Number.isFinite(pick) || pick < 1 || pick > cobertura.logradouros.length) {
+      return texts(
+        askCoberturaEnderecoMessage(
+          cobertura.logradouros.map((item, index) => ({
+            index: index + 1,
+            label: item.descricao || `${item.tipoLogradouro || ""} ${item.nomeLogradouro || ""}`.trim(),
+          })),
+        ),
+      );
+    }
+    return finishCoberturaSelection(jid, pick - 1);
+  }
+
+  return startCoberturaFlow(jid);
 }
 
 async function runOption(jid: string, kind: VendorQueryKind | "encerrar"): Promise<VendorOutgoing[]> {
@@ -148,8 +356,12 @@ async function runOption(jid: string, kind: VendorQueryKind | "encerrar"): Promi
   }
 
   if (kind === "faturas") {
-    setVendorPhase(jid, "awaiting_cpf");
+    setVendorPhase(jid, "awaiting_cpf", { cobertura: null });
     return texts(askCpfFaturaMessage());
+  }
+
+  if (kind === "cobertura") {
+    return startCoberturaFlow(jid);
   }
 
   const session = getVendorSession(jid);
@@ -157,7 +369,7 @@ async function runOption(jid: string, kind: VendorQueryKind | "encerrar"): Promi
   try {
     const page = await getVendorPage(jid);
     const result = await runVendorCrmQuery(page, kind);
-    setVendorPhase(jid, "menu", { busy: false });
+    setVendorPhase(jid, "menu", { busy: false, cobertura: null });
     return formatQueryResultMessages(result).map((text) => ({ kind: "text" as const, text }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -173,12 +385,14 @@ async function runOption(jid: string, kind: VendorQueryKind | "encerrar"): Promi
     setVendorPhase(jid, "menu", { busy: false });
     return texts(
       `❌ Deu erro ao buscar no CRM.\n` +
-        `Pode tentar novamente? Digite a opção (*1–6*) ou *7* para encerrar.`,
+        `Pode tentar novamente? Digite a opção (*1–7*) ou *8* para encerrar.`,
     );
   } finally {
     const current = getVendorSession(jid);
     if (current.crmUser && current.page) {
-      if (current.phase !== "awaiting_cpf") current.phase = "menu";
+      if (current.phase !== "awaiting_cpf" && current.phase !== "awaiting_cobertura") {
+        current.phase = "menu";
+      }
       current.busy = false;
     } else {
       current.busy = false;
@@ -198,6 +412,10 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
     return texts("⏳ Estou consultando agora. Só um instante…");
   }
 
+  if (session.phase === "awaiting_cobertura" && session.crmUser) {
+    return handleCoberturaMessage(jid, raw);
+  }
+
   // Aguardando CPF da fatura (mantém CRM logado)
   if (session.phase === "awaiting_cpf" && session.crmUser) {
     const option = optionFromText(raw);
@@ -207,7 +425,7 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
     return texts(askCpfFaturaMessage());
   }
 
-  // Logado no CRM: menu / atalho CPF. Opção 6 (fatura) não precisa do Playwright.
+  // Logado no CRM: menu / atalho CPF. Opções 6/7 não precisam do Playwright do CRM.
   if ((session.phase === "menu" || session.phase === "awaiting_cpf") && session.crmUser) {
     const option = optionFromText(raw);
     if (!option) {
@@ -218,24 +436,22 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
       }
       return texts(menuMessage(session.crmUser));
     }
-    if (option === "faturas" || option === "encerrar") {
+    if (option === "faturas" || option === "cobertura" || option === "encerrar") {
       return runOption(jid, option);
     }
     if (!session.page) {
       return texts(
         `⚠️ A aba do CRM caiu. Envie o *usuário* de novo para reabrir,\n` +
-          `ou digite *6* para consultar fatura sem o CRM.`,
+          `ou digite *6* (fatura) / *7* (cobertura) sem o CRM.`,
       );
     }
     return runOption(jid, option);
   }
 
   if (session.phase === "awaiting_pass" && session.pendingUser) {
-    // Credenciais completas na mesma mensagem (usuario + senha)
     const both = parseCredentials(raw);
     if (both) return tryLogin(jid, both.user, both.pass);
 
-    // Troca explícita de usuário: "usuario: fulano" (nunca tratar senha solta como login)
     const labeledUser = raw.match(/^(?:usuario|usu[aá]rio|login|user)\s*[:=]\s*(\S+)/i);
     if (labeledUser?.[1]) {
       const nextUser = captureUsername(labeledUser[1]) || labeledUser[1];
@@ -253,7 +469,6 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
     return tryLogin(jid, session.pendingUser, pass);
   }
 
-  // need_login e awaiting_user: aceita usuário, ou usuário+senha na mesma msg
   if (session.phase === "need_login" || session.phase === "awaiting_user") {
     const both = parseCredentials(raw);
     if (both) return tryLogin(jid, both.user, both.pass);
@@ -280,6 +495,7 @@ export function resetVendorToAskLogin(jid: string) {
     crmUser: null,
     pendingUser: null,
     busy: false,
+    cobertura: null,
   });
   return askUserOnlyMessage();
 }

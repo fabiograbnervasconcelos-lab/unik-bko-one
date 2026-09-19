@@ -23,7 +23,8 @@ export type VendorQueryKind =
   | "quebra"
   | "cancelados"
   | "biometria"
-  | "faturas";
+  | "faturas"
+  | "cobertura";
 
 export type VendorCrmRow = {
   name: string;
@@ -254,7 +255,8 @@ export function menuMessage(crmUser?: string | null, queriedAt = formatQueryTime
     `4️⃣ Cancelados do mês\n` +
     `5️⃣ Ag. biometria\n` +
     `6️⃣ Faturas clientes\n` +
-    `7️⃣ Encerrar e deslogar\n\n` +
+    `7️⃣ Cobertura Nio Fibra\n` +
+    `8️⃣ Encerrar e deslogar\n\n` +
     consultationFooter(queriedAt)
   );
 }
@@ -268,7 +270,7 @@ export function askCpfFaturaMessage() {
     `📄 *Faturas de clientes*\n\n` +
     `Envie o *CPF* (ou CNPJ) do cliente em qualquer formato.\n` +
     `Exemplos: \`591.028.530-00\` ou \`59102853000\`\n\n` +
-    `_Digite *7* para encerrar ou *1–5* para outras opções._\n` +
+    `_Digite *8* para encerrar ou *1–7* para outras opções._\n` +
     `_build-fatura6-20260919_`
   );
 }
@@ -277,8 +279,49 @@ export function afterFaturaMessage() {
   return (
     `Precisa de mais alguma coisa?\n` +
     `• Envie *outro CPF* para nova fatura\n` +
-    `• Digite *1–5* para outras consultas do CRM\n` +
-    `• Digite *7* para encerrar`
+    `• Digite *1–7* para outras consultas\n` +
+    `• Digite *8* para encerrar`
+  );
+}
+
+export function askCoberturaCepMessage() {
+  return (
+    `📡 *Cobertura Nio Fibra*\n\n` +
+    `Envie o *CEP* do endereço (8 dígitos).\n` +
+    `Exemplo: \`89056161\` ou \`89056-161\`\n\n` +
+    `_Digite *menu* para voltar ou *8* para encerrar._`
+  );
+}
+
+export function askCoberturaNumeroMessage(cep: string) {
+  const masked = cep.replace(/(\d{5})(\d{3})/, "$1-$2");
+  return (
+    `📡 *Cobertura Nio Fibra*\n\n` +
+    `CEP: *${masked}*\n\n` +
+    `Agora envie o *número* da casa/prédio.\n` +
+    `Exemplo: \`369\`\n\n` +
+    `_Se não tiver número, mande *SN*._`
+  );
+}
+
+export function askCoberturaEnderecoMessage(
+  options: Array<{ index: number; label: string }>,
+) {
+  const lines = options.map((opt) => `${opt.index}️⃣ ${opt.label}`);
+  return (
+    `📡 *Escolha o endereço*\n\n` +
+    `${lines.join("\n")}\n\n` +
+    `Responda com o *número* da opção.\n` +
+    `_Ou digite *menu* para voltar._`
+  );
+}
+
+export function afterCoberturaMessage() {
+  return (
+    `Quer consultar *outra cobertura*?\n` +
+    `• Digite *sim* / *outra* para novo CEP\n` +
+    `• Digite *menu* para o menu de opções\n` +
+    `• Digite *8* para encerrar`
   );
 }
 
@@ -406,7 +449,7 @@ export function formatQueryResultMessages(result: VendorQueryResult): string[] {
   const footer = consultationFooter(queriedAt);
   const askMore =
     `Precisa de mais alguma informação?\n` +
-    `Digite *1–6* para outra busca ou *7* para encerrar.`;
+    `Digite *1–7* para outra busca ou *8* para encerrar.`;
 
   if (result.kind === "faturas") {
     return [
@@ -461,15 +504,19 @@ export function optionFromText(text: string): VendorQueryKind | "encerrar" | nul
     .replace(/4️⃣/g, "4")
     .replace(/5️⃣/g, "5")
     .replace(/6️⃣/g, "6")
-    .replace(/7️⃣/g, "7");
+    .replace(/7️⃣/g, "7")
+    .replace(/8️⃣/g, "8");
   if (!cleaned) return null;
-  if (/^7\b/.test(cleaned) || /^(encerrar|sair|logout|deslogar)\b/.test(cleaned)) return "encerrar";
+  if (/^8\b/.test(cleaned) || /^(encerrar|sair|logout|deslogar)\b/.test(cleaned)) {
+    return "encerrar";
+  }
   if (/^1\b/.test(cleaned) || /^instalad/.test(cleaned)) return "instalados";
   if (/^2\b/.test(cleaned) || /^agendad/.test(cleaned)) return "agendados";
   if (/^3\b/.test(cleaned) || /quebra/.test(cleaned)) return "quebra";
   if (/^4\b/.test(cleaned) || /^cancelad/.test(cleaned)) return "cancelados";
   if (/^5\b/.test(cleaned) || /biometr/.test(cleaned)) return "biometria";
   if (/^6\b/.test(cleaned) || /fatura/.test(cleaned)) return "faturas";
+  if (/^7\b/.test(cleaned) || /^(cobertura)\b/.test(cleaned)) return "cobertura";
   return null;
 }
 

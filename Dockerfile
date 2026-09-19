@@ -1,7 +1,7 @@
 FROM node:20-bookworm
 
 # Rebuild marker: UI WhatsApp CRM vs CRM×GED via APP_MODE.
-ARG BUILD_STAMP=login-pass-fix-20260919
+ARG BUILD_STAMP=cobertura7-20260919
 LABEL unik.bko.build="${BUILD_STAMP}"
 
 WORKDIR /app

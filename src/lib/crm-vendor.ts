@@ -194,6 +194,9 @@ export async function runVendorCrmQuery(page: Page, kind: VendorQueryKind): Prom
     // Nunca montar stub aqui — o bot WhatsApp pede CPF e consulta o Robô One.
     return withMeta(kind, "Faturas de clientes", [], null, "Envie o CPF do cliente.");
   }
+  if (kind === "cobertura") {
+    return withMeta(kind, "Cobertura Nio Fibra", [], null, "Envie o CEP do endereço.");
+  }
   if (kind === "instalados") {
     return withMeta(kind, "Instalados", await collectBySearch(page, CRM_NIO_HISTORICO, "instalado", kind), label);
   }
