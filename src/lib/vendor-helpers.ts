@@ -348,11 +348,32 @@ export function coberturaEnderecoOptions(
 
 export function afterCoberturaMessage() {
   return (
-    `Quer consultar *outra cobertura*?\n` +
-    `• Digite *sim* / *outra* para novo CEP\n` +
-    `• Digite *menu* para o menu de opções\n` +
-    `• Digite *8* para encerrar`
+    `Quer consultar *outra cobertura*?\n\n` +
+    `*S* — Sim, consultar outro CEP\n` +
+    `*N* — Não, voltar ao menu\n` +
+    `*8* — Encerrar sessão`
   );
+}
+
+/** Normaliza texto curto de sim/não (sem acento). */
+function normalizeShortReply(text: string) {
+  return text
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .trim()
+    .toLowerCase();
+}
+
+/** S / sim / outra → nova consulta de cobertura. */
+export function wantsAnotherCobertura(text: string) {
+  const t = normalizeShortReply(text);
+  return /^(s|sim|ss|outra|outro|novo|nova)$/.test(t);
+}
+
+/** N / nao / nao quero → sair da cobertura e voltar ao menu. */
+export function declinesCobertura(text: string) {
+  const t = normalizeShortReply(text);
+  return /^(n|nao|nop|no|nunca|cancelar|cancela)$/.test(t);
 }
 
 /** Aceita CPF (11) ou CNPJ (14) em qualquer máscara. */

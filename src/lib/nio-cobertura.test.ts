@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseCepInput, parseHouseNumberInput } from "./nio-cobertura.ts";
 import {
+  afterCoberturaMessage,
   askCoberturaEnderecoMessage,
   coberturaEnderecoOptions,
+  declinesCobertura,
   menuMessage,
   optionFromText,
   parseCoberturaEnderecoPick,
+  wantsAnotherCobertura,
 } from "./vendor-helpers.ts";
 
 test("menu tem cobertura na 7 e encerrar na 8", () => {
@@ -49,4 +52,23 @@ test("escolha de endereço usa letras A/B e não conflita com menu 1", () => {
   assert.match(msg, /\*A\* — Rua Um 369/);
   assert.match(msg, /\*B\* — Rua Dois 369/);
   assert.doesNotMatch(msg, /1️⃣/);
+});
+
+test("pós-cobertura: S/sim = outra, N/não = sair", () => {
+  assert.equal(wantsAnotherCobertura("S"), true);
+  assert.equal(wantsAnotherCobertura("sim"), true);
+  assert.equal(wantsAnotherCobertura("outra"), true);
+  assert.equal(wantsAnotherCobertura("não"), false);
+  assert.equal(wantsAnotherCobertura("nao"), false);
+  assert.equal(wantsAnotherCobertura("N"), false);
+
+  assert.equal(declinesCobertura("N"), true);
+  assert.equal(declinesCobertura("não"), true);
+  assert.equal(declinesCobertura("nao"), true);
+  assert.equal(declinesCobertura("sim"), false);
+  assert.equal(declinesCobertura("S"), false);
+
+  const after = afterCoberturaMessage();
+  assert.match(after, /\*S\* — Sim/);
+  assert.match(after, /\*N\* — Não/);
 });

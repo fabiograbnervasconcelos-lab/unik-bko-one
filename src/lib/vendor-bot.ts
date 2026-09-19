@@ -17,6 +17,7 @@ import {
   askPasswordMessage,
   askUserOnlyMessage,
   coberturaEnderecoOptions,
+  declinesCobertura,
   formatFaturaText,
   formatQueryResultMessages,
   formatQueryTimestamp,
@@ -27,6 +28,7 @@ import {
   parseCoberturaEnderecoPick,
   parseCredentials,
   parseDocumentInput,
+  wantsAnotherCobertura,
 } from "@/lib/vendor-helpers";
 import {
   destroyVendorSession,
@@ -54,10 +56,6 @@ function texts(...values: string[]): VendorOutgoing[] {
 
 function wantsMenu(text: string) {
   return /^(menu|voltar|opcoes|opções)$/i.test(text.trim());
-}
-
-function wantsAnotherCobertura(text: string) {
-  return /^(sim|s|outra|outro|novo|nova|cobertura)$/i.test(text.trim());
 }
 
 async function tryLogin(jid: string, user: string, pass: string): Promise<VendorOutgoing[]> {
@@ -305,12 +303,16 @@ async function handleCoberturaMessage(jid: string, raw: string): Promise<VendorO
     if (wantsAnotherCobertura(raw) || option === "cobertura") {
       return startCoberturaFlow(jid);
     }
+    if (declinesCobertura(raw)) {
+      setVendorPhase(jid, "menu", { cobertura: null });
+      return texts(menuMessage(session.crmUser));
+    }
     if (option) {
       setVendorPhase(jid, "menu", { cobertura: null });
       return runOption(jid, option);
     }
-    setVendorPhase(jid, "menu", { cobertura: null });
-    return texts(menuMessage(session.crmUser));
+    // Resposta ambígua: repete S/N em vez de reiniciar CEP
+    return texts(afterCoberturaMessage());
   }
 
   // Enquanto escolhe endereço: NÃO interpretar 1/2/7 como menu CRM
@@ -323,6 +325,11 @@ async function handleCoberturaMessage(jid: string, raw: string): Promise<VendorO
   }
 
   if (cobertura.step === "cep") {
+    // "não" no pedido de CEP = desistiu → menu (não reperguntar CEP)
+    if (declinesCobertura(raw)) {
+      setVendorPhase(jid, "menu", { cobertura: null });
+      return texts(menuMessage(session.crmUser));
+    }
     // CEP numérico não pode virar opção de menu
     const cep = parseCepInput(raw);
     if (!cep) {
@@ -340,6 +347,10 @@ async function handleCoberturaMessage(jid: string, raw: string): Promise<VendorO
   }
 
   if (cobertura.step === "numero") {
+    if (declinesCobertura(raw)) {
+      setVendorPhase(jid, "menu", { cobertura: null });
+      return texts(menuMessage(session.crmUser));
+    }
     const numero = parseHouseNumberInput(raw);
     if (!numero) {
       const option = optionFromText(raw);
