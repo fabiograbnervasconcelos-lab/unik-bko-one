@@ -52,17 +52,12 @@ O here.now sozinho não executa CRM/GED/WhatsApp.
 
 O painel precisa de Chrome/Playwright, WhatsApp sempre ligado e disco para a sessão. Por isso o deploy usa Docker (`Dockerfile`), não Vercel.
 
-- **Railway:** https://unik-bko-one-production.up.railway.app/ — Docker + volume em `/app/data` (produção).
+- **WhatsApp CRM (robô vendedores):** https://whatsapp-crm-production-1010.up.railway.app/ — app Railway separado (`unik-whatsapp-crm`), volume próprio. Conecte o QR com o **48 99645-0101**. Cada vendedor que mandar mensagem recebe resposta no próprio chat.
+- **Railway (painel BKO/GED):** https://unik-bko-one-production.up.railway.app/ — Docker + volume em `/app/data` (sem WhatsApp de vendedores; `DISABLE_WHATSAPP=1`).
 - **Render:** https://unik-bko-one.onrender.com/ — Docker no plano free (sem disco persistente; a instância dorme quando fica ociosa).
 - **here.now:** página permanente só com iframe; o robô só roda se o servidor (Railway) estiver no ar.
 
-Produção escuta `PORT` (`npm start` → `scripts/start.mjs`). Health check: `GET /api/health`. Versão da build: `GET /api/version` (precisa responder JSON com `faturaOpcao6: true`).
-
-Se `/api/version` der 404 ou `/api/health` não tiver `features.faturaOpcao6`, o Railway **não** está no `main` atual. Merge no GitHub sozinho não atualiza o container. No painel Railway do serviço:
-
-1. **Settings → Source** — repo `unik-bko-one`, branch **`main`** (não outra branch).
-2. **Deployments → Deploy → Deploy latest commit** — gera build nova a partir do `main`. Evite só **Redeploy** numa deployment antiga (isso reaproveita a imagem velha).
-3. Espere a deploy ficar **Success** e abra de novo https://unik-bko-one-production.up.railway.app/api/version
+Produção do robô WhatsApp: `GET https://whatsapp-crm-production-1010.up.railway.app/api/health`. Versão: `GET .../api/version`.
 
 1. Escaneie o QR com o WhatsApp da operação.
 2. Preencha usuário/senha do CRM e do GED360 (domínio BrPronto por padrão).
