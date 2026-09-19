@@ -13,8 +13,12 @@ export async function GET() {
     ok: true,
     gitSha: sha,
     shortSha: sha.slice(0, 12),
+    buildId: "login-pass-fix-20260919",
+    appMode: process.env.APP_MODE || "bko",
     faturaOpcao6: true,
     askCpfOnOption6: true,
+    noEmBreve: true,
+    replySameChat: true,
     timezone: "America/Sao_Paulo",
     builtAt: new Date().toISOString(),
   });

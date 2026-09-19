@@ -269,7 +269,7 @@ export function askCpfFaturaMessage() {
     `Envie o *CPF* (ou CNPJ) do cliente em qualquer formato.\n` +
     `Exemplos: \`591.028.530-00\` ou \`59102853000\`\n\n` +
     `_Digite *7* para encerrar ou *1–5* para outras opções._\n` +
-    `_v-fatura-6_`
+    `_build-fatura6-20260919_`
   );
 }
 
@@ -368,7 +368,13 @@ export function askPasswordMessage(user: string) {
   );
 }
 
-export function loginErrorMessage() {
+export function loginErrorMessage(user?: string | null) {
+  if (user) {
+    return (
+      `❌ Não consegui entrar no CRM com o usuário *${user}*.\n\n` +
+      `Envie a *senha* de novo (ou mande \`usuario\` e \`senha\` em duas linhas).`
+    );
+  }
   return (
     `❌ Não consegui entrar no CRM com esses dados.\n\n` +
     `Pode tentar de novo?\n` +
