@@ -3,7 +3,13 @@ import { launchBrowser, newContext } from "@/lib/browser";
 import { loginCrmAsVendor, logoutCrmPage } from "@/lib/crm-vendor";
 import { log } from "@/lib/store";
 
-export type VendorPhase = "need_login" | "awaiting_user" | "awaiting_pass" | "menu" | "busy";
+export type VendorPhase =
+  | "need_login"
+  | "awaiting_user"
+  | "awaiting_pass"
+  | "menu"
+  | "awaiting_cpf"
+  | "busy";
 
 export type VendorSession = {
   jid: string;
@@ -114,7 +120,7 @@ export async function getVendorPage(jid: string) {
   if (!session.page || !session.crmUser) {
     throw new Error("VENDOR_NOT_LOGGED");
   }
-  if (session.phase !== "menu" && session.phase !== "busy") {
+  if (session.phase !== "menu" && session.phase !== "busy" && session.phase !== "awaiting_cpf") {
     throw new Error("VENDOR_NOT_LOGGED");
   }
   try {

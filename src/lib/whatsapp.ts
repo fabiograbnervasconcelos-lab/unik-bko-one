@@ -115,6 +115,25 @@ async function replyText(remoteJid: string, text: string) {
   });
 }
 
+async function replyPdf(
+  remoteJid: string,
+  data: Buffer,
+  fileName: string,
+  caption?: string,
+) {
+  if (!runtime.socket) return;
+  await runtime.socket
+    .sendMessage(remoteJid, {
+      document: data,
+      mimetype: "application/pdf",
+      fileName,
+      caption,
+    })
+    .catch((error) => {
+      log("warn", `Falha ao enviar PDF WhatsApp (${remoteJid}): ${String(error)}`);
+    });
+}
+
 async function handleIncomingCommand(message: WAMessage) {
   if (message.key.fromMe) return;
   const remoteJid = message.key.remoteJid;
@@ -157,7 +176,11 @@ async function handleIncomingCommand(message: WAMessage) {
     const { handleVendorMessage } = await import("@/lib/vendor-bot");
     const replies = await handleVendorMessage(remoteJid, text);
     for (const reply of replies) {
-      await replyText(remoteJid, reply);
+      if (reply.kind === "text") {
+        await replyText(remoteJid, reply.text);
+      } else if (reply.kind === "pdf") {
+        await replyPdf(remoteJid, reply.data, reply.fileName, reply.caption);
+      }
     }
   } catch (error) {
     log("error", `Bot vendedor falhou: ${String(error)}`);
