@@ -89,6 +89,30 @@ export function resolveOwnerJid() {
   return defaultOwnerJid();
 }
 
+function isIgnorableChatJid(jid: string) {
+  return (
+    jid.endsWith("@g.us") ||
+    jid.endsWith("@broadcast") ||
+    jid.endsWith("@newsletter") ||
+    jid === "status@broadcast"
+  );
+}
+
+/** Preferência: responder no JID em que a mensagem chegou; sessão CRM unifica LID+telefone. */
+function chatRouting(message: WAMessage) {
+  const remoteJid = message.key.remoteJid || "";
+  const alt = message.key.remoteJidAlt || undefined;
+  const candidates = [remoteJid, alt].filter(Boolean) as string[];
+  const phoneJid = candidates.find((jid) => jid.endsWith("@s.whatsapp.net"));
+  const lidJid = candidates.find((jid) => jid.endsWith("@lid"));
+  return {
+    replyJid: remoteJid,
+    sessionJid: phoneJid || remoteJid,
+    phoneJid: phoneJid || null,
+    lidJid: lidJid || null,
+  };
+}
+
 function incomingText(message: WAMessage) {
   const content = message.message;
   if (!content) return "";
@@ -109,10 +133,13 @@ function incomingText(message: WAMessage) {
 }
 
 async function replyText(remoteJid: string, text: string) {
-  if (!runtime.socket || !text) return;
-  await runtime.socket.sendMessage(remoteJid, { text }).catch((error) => {
+  if (!runtime.socket || !text || !remoteJid) return;
+  try {
+    await runtime.socket.sendMessage(remoteJid, { text });
+    log("info", `Resposta WhatsApp enviada para ${remoteJid}.`);
+  } catch (error) {
     log("warn", `Falha ao responder WhatsApp (${remoteJid}): ${String(error)}`);
-  });
+  }
 }
 
 async function replyPdf(
@@ -138,25 +165,41 @@ async function handleIncomingCommand(message: WAMessage) {
   if (message.key.fromMe) return;
   const remoteJid = message.key.remoteJid;
   if (!remoteJid) return;
-  // Só conversa 1:1 — ignora grupos e broadcast
-  if (remoteJid.endsWith("@g.us") || remoteJid.endsWith("@broadcast") || remoteJid === "status@broadcast") {
+  // Só conversa 1:1 — ignora grupos, broadcast e canais/newsletter
+  if (isIgnorableChatJid(remoteJid)) return;
+
+  const text = incomingText(message);
+  if (!text) {
+    log(
+      "info",
+      `WhatsApp DM sem texto útil de ${remoteJid}` +
+        (message.key.remoteJidAlt ? ` (alt ${message.key.remoteJidAlt})` : "") +
+        ` keys=${message.message ? Object.keys(message.message).join(",") : "none"}`,
+    );
     return;
   }
 
-  const text = incomingText(message);
-  if (!text) return;
+  const { replyJid, sessionJid, phoneJid, lidJid } = chatRouting(message);
+  if (phoneJid && lidJid) {
+    const { linkVendorJids } = await import("@/lib/vendor-session");
+    linkVendorJids(phoneJid, lidJid);
+  }
 
   // Owner: mantém o comando BKO "validar e enviar"
-  if (isOwnerDirectChat(remoteJid, message.key.participant) && isValidateAndSendCommand(text)) {
-    persistOwnerJid(remoteJid);
+  if (
+    (isOwnerDirectChat(replyJid, message.key.participant) ||
+      (phoneJid && isOwnerDirectChat(phoneJid, message.key.participant))) &&
+    isValidateAndSendCommand(text)
+  ) {
+    persistOwnerJid(phoneJid || replyJid);
     if (Date.now() - runtime.lastCommandAt < 8000) {
       log("info", "Comando WhatsApp ignorado: já está rodando um validar e enviar.");
       return;
     }
     runtime.lastCommandAt = Date.now();
-    log("info", `Comando WhatsApp recebido de ${remoteJid}: ${text}`);
+    log("info", `Comando WhatsApp recebido de ${replyJid}: ${text}`);
     await replyText(
-      remoteJid,
+      replyJid,
       "Unik BKO: recebi *validar e enviar*. Vou consultar e mandar o que estiver na fila.",
     );
     const { startValidateAndSendFromWhatsApp } = await import("@/lib/pipeline");
@@ -165,27 +208,32 @@ async function handleIncomingCommand(message: WAMessage) {
     } catch (error) {
       const err = error instanceof Error ? error.message : String(error);
       log("error", `Comando validar e enviar falhou: ${err}`);
-      await replyText(remoteJid, `Unik BKO: não consegui executar. ${err}`);
+      await replyText(replyJid, `Unik BKO: não consegui executar. ${err}`);
     }
     return;
   }
 
   // Vendedores (e o dono, se não for o comando BKO): fluxo CRM por WhatsApp
-  log("info", `Mensagem vendedor de ${remoteJid}: ${text.slice(0, 40)}`);
+  log(
+    "info",
+    `Mensagem vendedor de ${replyJid}` +
+      (sessionJid !== replyJid ? ` [sessão ${sessionJid}]` : "") +
+      `: ${text.slice(0, 40)}`,
+  );
   try {
     const { handleVendorMessage } = await import("@/lib/vendor-bot");
-    const replies = await handleVendorMessage(remoteJid, text);
+    const replies = await handleVendorMessage(sessionJid, text);
     for (const reply of replies) {
       if (reply.kind === "text") {
-        await replyText(remoteJid, reply.text);
+        await replyText(replyJid, reply.text);
       } else if (reply.kind === "pdf") {
-        await replyPdf(remoteJid, reply.data, reply.fileName, reply.caption);
+        await replyPdf(replyJid, reply.data, reply.fileName, reply.caption);
       }
     }
   } catch (error) {
     log("error", `Bot vendedor falhou: ${String(error)}`);
     await replyText(
-      remoteJid,
+      replyJid,
       "❌ Deu erro interno. Pode tentar novamente em instantes?",
     );
   }
@@ -303,7 +351,11 @@ export async function connectWhatsApp() {
         runtime.qrPng = null;
         setWhatsAppState("connected", { qrDataUrl: null, whatsappError: null });
         const me = runtime.socket?.user?.id ?? "sessão";
-        log("info", `WhatsApp conectado como ${me}. Avisos nos grupos + cópia de validação no 48 99194-0908.`);
+        const meDigits = onlyDigits(me.split(":")[0] || me);
+        log(
+          "info",
+          `WhatsApp conectado como ${me}. Número do robô: ${meDigits || "desconhecido"}. Avisos nos grupos + cópia de validação no 48 99194-0908.`,
+        );
         await refreshGroups().catch((error) => {
           log("warn", `Não consegui listar os grupos: ${String(error)}`);
         });
