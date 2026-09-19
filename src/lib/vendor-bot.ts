@@ -305,7 +305,7 @@ async function handleCoberturaMessage(jid: string, raw: string): Promise<VendorO
     if (wantsAnotherCobertura(raw) || option === "cobertura") {
       return startCoberturaFlow(jid);
     }
-    if (option && option !== "cobertura") {
+    if (option) {
       setVendorPhase(jid, "menu", { cobertura: null });
       return runOption(jid, option);
     }
