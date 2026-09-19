@@ -368,7 +368,13 @@ export function askPasswordMessage(user: string) {
   );
 }
 
-export function loginErrorMessage() {
+export function loginErrorMessage(user?: string | null) {
+  if (user) {
+    return (
+      `❌ Não consegui entrar no CRM com o usuário *${user}*.\n\n` +
+      `Envie a *senha* de novo (ou mande \`usuario\` e \`senha\` em duas linhas).`
+    );
+  }
   return (
     `❌ Não consegui entrar no CRM com esses dados.\n\n` +
     `Pode tentar de novo?\n` +

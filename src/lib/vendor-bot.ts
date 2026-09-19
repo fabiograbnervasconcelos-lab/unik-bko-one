@@ -42,18 +42,48 @@ function texts(...values: string[]): VendorOutgoing[] {
 async function tryLogin(jid: string, user: string, pass: string): Promise<VendorOutgoing[]> {
   const session = getVendorSession(jid);
   session.busy = true;
+  log("info", `Tentando login CRM vendedor (${user})…`);
   try {
     await openVendorCrm(jid, user, pass);
     return texts(loggedInMessage(user));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    log("warn", `Login CRM vendedor falhou: ${message}`);
-    setVendorPhase(jid, "awaiting_user", { busy: false, crmUser: null, pendingUser: null });
-    return texts(loginErrorMessage());
+    log("warn", `Login CRM vendedor falhou (${user}): ${message}`);
+    // Mantém o usuário: só pede a senha de novo
+    setVendorPhase(jid, "awaiting_pass", {
+      busy: false,
+      crmUser: null,
+      pendingUser: user,
+    });
+    return texts(loginErrorMessage(user));
   } finally {
     const current = getVendorSession(jid);
     current.busy = false;
   }
+}
+
+/** Saudações / lixo que não são usuário CRM. */
+function isNonUsernameNoise(text: string) {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return true;
+  return /^(oi+|ola+|olá+|hey|hi+|hello|bom dia|boa tarde|boa noite|eai|e ai|tudo bem|td bem|menu|iniciar|start|ajuda|help)$/i.test(
+    normalized,
+  );
+}
+
+function captureUsername(raw: string): string | null {
+  const user = raw
+    .replace(/^(?:usuario|usu[aá]rio|login|user)\s*[:=]\s*/i, "")
+    .trim()
+    .split(/\s+/)[0];
+  if (!user || user.length < 2 || /^\d+$/.test(user) || isNonUsernameNoise(user)) {
+    return null;
+  }
+  return user;
 }
 
 async function runFaturaLookup(jid: string, docDigits: string): Promise<VendorOutgoing[]> {
@@ -198,29 +228,46 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
   }
 
   if (session.phase === "awaiting_pass" && session.pendingUser) {
-    const pass = raw.replace(/^(?:senha|password|pass)\s*[:=]\s*/i, "").trim();
-    if (!pass) return texts(askPasswordMessage(session.pendingUser));
+    // Troca de usuário: mandou outro login em vez da senha
     const both = parseCredentials(raw);
     if (both) return tryLogin(jid, both.user, both.pass);
+
+    const maybeNewUser = captureUsername(raw);
+    if (
+      maybeNewUser &&
+      maybeNewUser.toLowerCase() !== session.pendingUser.toLowerCase() &&
+      !/^(?:senha|password|pass)\s*[:=]/i.test(raw)
+    ) {
+      // Se parece usuário novo (sem prefixo senha), atualiza e pede senha
+      // Só troca se a mensagem for curta (1 token) — senhas longas seguem como senha
+      const tokens = raw.trim().split(/\s+/);
+      if (tokens.length === 1) {
+        setVendorPhase(jid, "awaiting_pass", { pendingUser: maybeNewUser });
+        return texts(askPasswordMessage(maybeNewUser));
+      }
+    }
+
+    const pass = raw.replace(/^(?:senha|password|pass)\s*[:=]\s*/i, "").trim();
+    if (!pass || isNonUsernameNoise(pass)) {
+      return texts(askPasswordMessage(session.pendingUser));
+    }
     return tryLogin(jid, session.pendingUser, pass);
   }
 
-  if (session.phase === "need_login") {
-    setVendorPhase(jid, "awaiting_user");
-    return texts(askUserOnlyMessage());
-  }
-
-  if (session.phase === "awaiting_user") {
+  // need_login e awaiting_user: aceita usuário, ou usuário+senha na mesma msg
+  if (session.phase === "need_login" || session.phase === "awaiting_user") {
     const both = parseCredentials(raw);
     if (both) return tryLogin(jid, both.user, both.pass);
 
-    const user = raw
-      .replace(/^(?:usuario|usu[aá]rio|login|user)\s*[:=]\s*/i, "")
-      .trim()
-      .split(/\s+/)[0];
-    if (user && user.length >= 2 && !/^\d+$/.test(user)) {
+    const user = captureUsername(raw);
+    if (user) {
       setVendorPhase(jid, "awaiting_pass", { pendingUser: user });
+      log("info", `Vendedor informou usuário CRM (${user}); pedindo senha.`);
       return texts(askPasswordMessage(user));
+    }
+
+    if (session.phase === "need_login") {
+      setVendorPhase(jid, "awaiting_user");
     }
     return texts(askUserOnlyMessage());
   }

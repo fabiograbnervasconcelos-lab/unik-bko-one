@@ -13,7 +13,7 @@ export async function GET() {
     ok: true,
     gitSha: sha,
     shortSha: sha.slice(0, 12),
-    buildId: "whatsapp-crm-ui-20260919",
+    buildId: "login-jid-fix-20260919",
     appMode: process.env.APP_MODE || "bko",
     faturaOpcao6: true,
     askCpfOnOption6: true,

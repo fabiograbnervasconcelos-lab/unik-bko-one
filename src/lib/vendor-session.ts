@@ -72,43 +72,77 @@ export function getVendorSession(jid: string) {
   return existing;
 }
 
+function mergeVendorSessionState(target: VendorSession, source: VendorSession) {
+  if (!target.crmUser && source.crmUser) target.crmUser = source.crmUser;
+  if (!target.pendingUser && source.pendingUser) target.pendingUser = source.pendingUser;
+  if (!target.page && source.page) {
+    target.page = source.page;
+    target.context = source.context;
+    target.browser = source.browser;
+  }
+  // Preferir fase mais avançada no login / já logada
+  const rank: Record<VendorPhase, number> = {
+    need_login: 0,
+    awaiting_user: 1,
+    awaiting_pass: 2,
+    busy: 3,
+    awaiting_cpf: 4,
+    menu: 5,
+  };
+  if ((rank[source.phase] ?? 0) > (rank[target.phase] ?? 0)) {
+    target.phase = source.phase;
+  }
+  if (source.lastActiveAt > target.lastActiveAt) {
+    target.lastActiveAt = source.lastActiveAt;
+  }
+  if (source.busy) target.busy = true;
+}
+
 /** Une LID (@lid) e telefone (@s.whatsapp.net) na mesma sessão do vendedor. */
 export function linkVendorJids(a: string, b: string) {
   if (!a || !b || a === b) return;
   const keyA = resolveVendorJid(a);
   const keyB = resolveVendorJid(b);
+  // Já apontam para a mesma chave — só reforça aliases. NÃO apagar a sessão.
+  if (keyA === keyB) {
+    aliases.set(a, keyA);
+    aliases.set(b, keyA);
+    return;
+  }
   const sessionA = sessions.get(keyA);
   const sessionB = sessions.get(keyB);
   let canonical = keyA;
   if (sessionB && !sessionA) canonical = keyB;
   else if (sessionA && sessionB) {
-    // Preferir a sessão já logada / com página
+    // Preferir a sessão já logada / com página / mais avançada no login
     if (!sessionA.crmUser && sessionB.crmUser) canonical = keyB;
     else if (!sessionA.page && sessionB.page) canonical = keyB;
+    else if (
+      !sessionA.crmUser &&
+      !sessionB.crmUser &&
+      (sessionB.pendingUser || sessionB.phase === "awaiting_pass") &&
+      !(sessionA.pendingUser || sessionA.phase === "awaiting_pass")
+    ) {
+      canonical = keyB;
+    }
   }
   aliases.set(a, canonical);
   aliases.set(b, canonical);
   aliases.set(keyA, canonical);
   aliases.set(keyB, canonical);
   if (canonical === keyA && sessionB && sessionA) {
-    if (!sessionA.crmUser && sessionB.crmUser) sessionA.crmUser = sessionB.crmUser;
-    if (!sessionA.page && sessionB.page) {
-      sessionA.page = sessionB.page;
-      sessionA.context = sessionB.context;
-      sessionA.browser = sessionB.browser;
-      sessionA.phase = sessionB.phase;
-    }
+    mergeVendorSessionState(sessionA, sessionB);
     sessions.delete(keyB);
   } else if (canonical === keyB && sessionA && sessionB) {
-    if (!sessionB.crmUser && sessionA.crmUser) sessionB.crmUser = sessionA.crmUser;
-    if (!sessionB.page && sessionA.page) {
-      sessionB.page = sessionA.page;
-      sessionB.context = sessionA.context;
-      sessionB.browser = sessionA.browser;
-      sessionB.phase = sessionA.phase;
-    }
+    mergeVendorSessionState(sessionB, sessionA);
     sessions.delete(keyA);
   }
+}
+
+/** Só para testes: limpa Map em memória. */
+export function resetVendorSessionStoreForTests() {
+  sessions.clear();
+  aliases.clear();
 }
 
 function resolveVendorJid(jid: string) {
