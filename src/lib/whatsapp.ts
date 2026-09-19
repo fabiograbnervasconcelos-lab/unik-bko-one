@@ -214,6 +214,9 @@ async function handleIncomingCommand(message: WAMessage) {
   }
 
   // Vendedores (e o dono, se não for o comando BKO): fluxo CRM por WhatsApp
+  if (process.env.DISABLE_VENDOR_BOT === "1") {
+    return;
+  }
   log(
     "info",
     `Mensagem vendedor de ${replyJid}` +

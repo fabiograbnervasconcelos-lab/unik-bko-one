@@ -1,7 +1,7 @@
 FROM node:20-bookworm
 
-# Rebuild marker: fatura opção 6 ativa (pede CPF, sem "Em breve").
-ARG BUILD_STAMP=fatura6-20260919
+# Rebuild marker: UI WhatsApp CRM vs CRM×GED via APP_MODE.
+ARG BUILD_STAMP=whatsapp-crm-ui-20260919
 LABEL unik.bko.build="${BUILD_STAMP}"
 
 WORKDIR /app

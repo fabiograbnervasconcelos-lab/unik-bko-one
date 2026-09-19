@@ -71,6 +71,9 @@ Credenciais e a sessão do WhatsApp ficam em `data/` (fora do git).
 Variáveis opcionais no `.env`:
 
 ```
+APP_MODE=bko
+DISABLE_VENDOR_BOT=
+DISABLE_WHATSAPP=
 CRM_USER=
 CRM_PASS=
 GED_USER=
@@ -80,7 +83,15 @@ WHATSAPP_GROUP_BKO=bko one urgente
 WHATSAPP_GROUP_GERENTES=gerentes one
 OWNER_WHATSAPP=48991940908
 CHROME_PATH=/usr/local/bin/google-chrome
+FATURA_ROBO_URL=https://robo-one-telecom-production.up.railway.app
 ```
+
+Dois apps no Railway, mesmo repositório:
+
+| Serviço | `APP_MODE` | Outras vars | UI |
+| --- | --- | --- | --- |
+| `unik-whatsapp-crm` | `whatsapp-crm` | (WhatsApp do robô 48 99645-0101) | painel QR + vendedores |
+| `unik-bko-one` | `bko` (padrão) | `DISABLE_VENDOR_BOT=1` | CRM × GED + alertas grupos |
 
 ## Observações
 
