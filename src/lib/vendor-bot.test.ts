@@ -179,7 +179,41 @@ test("menu CRM ONE com emojis e rodapé de consulta", () => {
 test("optionFromText mapeia 1-7 e emojis", () => {
   assert.equal(optionFromText("1"), "instalados");
   assert.equal(optionFromText("1️⃣"), "instalados");
+  assert.equal(optionFromText("6"), "faturas");
   assert.equal(optionFromText("3 quebra"), "quebra");
   assert.equal(optionFromText("7"), "encerrar");
   assert.equal(optionFromText("encerrar"), "encerrar");
+});
+
+test("parseDocumentInput aceita CPF/CNPJ mascarados", async () => {
+  const { parseDocumentInput } = await import("./vendor-helpers.ts");
+  assert.equal(parseDocumentInput("591.028.530-00"), "59102853000");
+  assert.equal(parseDocumentInput("59102853000"), "59102853000");
+  assert.equal(parseDocumentInput("12.345.678/0001-90"), "12345678000190");
+  assert.equal(parseDocumentInput("abc"), null);
+});
+
+test("formatFaturaText traz pix e pergunta próximo passo", async () => {
+  const { formatFaturaText } = await import("./vendor-helpers.ts");
+  const text = formatFaturaText({
+    maskedDoc: "100.***.***-63",
+    customerName: "TAIRAN",
+    queriedAt: "19/09/2026 às 16:40",
+    invoices: [
+      {
+        amount: 75,
+        dueDate: "13/10/2026",
+        status: "em aberto",
+        contract: "03107438",
+        digitableLine: "03399.05382",
+        barcode: "0339",
+        pix: "00020101021226900014br.gov.bcb.pix",
+      },
+    ],
+  });
+  assert.match(text, /Pix copia e cola/);
+  assert.match(text, /00020101021226900014br\.gov\.bcb\.pix/);
+  assert.match(text, /outro CPF/);
+  assert.match(text, /PDF do boleto/);
+  assert.match(text, /Consulta realizada em/);
 });

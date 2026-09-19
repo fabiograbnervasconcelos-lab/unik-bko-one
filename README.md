@@ -25,12 +25,12 @@ Com o QR do painel logado, **qualquer vendedor** pode mandar mensagem no número
    - `(3)` Tratar quebra / Quebra em tratamento (quantidade)
    - `(4)` Cancelados do mês (quantidade)
    - `(5)` Ag. biometria (quantidade)
-   - `(6)` Faturas clientes (em breve)
+   - `(6)` Faturas clientes — pede CPF, consulta o [Robô One Telecom](https://robo-one-telecom-production.up.railway.app/), devolve Pix + PDF do boleto
    - `(7)` Encerrar e deslogar do CRM
 4. Depois de cada busca, pergunta se precisa de mais alguma informação.
 5. Se ainda estiver logado e mandar outra mensagem, o menu volta. Se encerrou (7) ou a sessão caiu, começa do zero.
 
-A busca usa **Histórico NIO** (instalados/agendados/quebra/cancelados) e **Pré-venda NIO** (ag. biometria) com o filtro rápido da tabela — mais rápido que baixar Excel de 60 dias.
+A busca usa **Histórico NIO** (instalados/agendados/quebra/cancelados) e **Pré-venda NIO** (ag. biometria) com o filtro rápido da tabela — mais rápido que baixar Excel de 60 dias. Faturas usam a API do Robô One (`/api/consulta?doc=`).
 
 Se o GED não mostrar Resultado da Análise, **não monta mensagem**.
 

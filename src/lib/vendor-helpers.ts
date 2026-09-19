@@ -249,7 +249,7 @@ export function menuMessage(crmUser?: string | null, queriedAt = formatQueryTime
     `3️⃣ Tratar quebra / Quebra em tratamento\n` +
     `4️⃣ Cancelados do mês\n` +
     `5️⃣ Ag. biometria\n` +
-    `6️⃣ Faturas clientes _(em breve)_\n` +
+    `6️⃣ Faturas clientes\n` +
     `7️⃣ Encerrar e deslogar\n\n` +
     consultationFooter(queriedAt)
   );
@@ -259,11 +259,88 @@ export function loggedInMessage(crmUser: string, queriedAt = formatQueryTimestam
   return `✅ *Logado*\nConta: *${crmUser}*\n\n${menuMessage(crmUser, queriedAt)}`;
 }
 
+export function askCpfFaturaMessage() {
+  return (
+    `📄 *Faturas de clientes*\n\n` +
+    `Envie o *CPF* (ou CNPJ) do cliente em qualquer formato.\n` +
+    `Exemplos: \`591.028.530-00\` ou \`59102853000\`\n\n` +
+    `_Digite *7* para encerrar ou *1–5* para outras opções._`
+  );
+}
+
+export function afterFaturaMessage() {
+  return (
+    `Precisa de mais alguma coisa?\n` +
+    `• Envie *outro CPF* para nova fatura\n` +
+    `• Digite *1–5* para outras consultas do CRM\n` +
+    `• Digite *7* para encerrar`
+  );
+}
+
+/** Aceita CPF (11) ou CNPJ (14) em qualquer máscara. */
+export function parseDocumentInput(text: string): string | null {
+  const digits = text.replace(/\D/g, "");
+  if (digits.length === 11 || digits.length === 14) return digits;
+  return null;
+}
+
+export function formatFaturaText(params: {
+  maskedDoc: string;
+  customerName: string | null;
+  invoices: Array<{
+    amount: number;
+    dueDate: string;
+    status: string;
+    contract: string | null;
+    digitableLine: string | null;
+    barcode: string | null;
+    pix: string | null;
+  }>;
+  queriedAt: string;
+}): string {
+  const { maskedDoc, customerName, invoices, queriedAt } = params;
+  if (!invoices.length) {
+    return (
+      `📄 *Faturas*\nCPF/CNPJ: *${maskedDoc}*\n\n` +
+      `Não encontrei faturas em aberto para este documento.\n\n` +
+      `${afterFaturaMessage()}\n\n` +
+      consultationFooter(queriedAt)
+    );
+  }
+
+  const who = customerName ? `\nCliente: *${customerName}*` : "";
+  const blocks = invoices.map((inv, index) => {
+    const lines = [
+      `*Fatura ${index + 1}*`,
+      `Valor: ${inv.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`,
+      `Vencimento: ${inv.dueDate}`,
+      `Status: ${inv.status}`,
+    ];
+    if (inv.contract) lines.push(`Contrato: ${inv.contract}`);
+    if (inv.digitableLine) {
+      lines.push("", "*Boleto — linha digitável:*", inv.digitableLine.replace(/\s+/g, ""));
+    }
+    if (inv.pix) {
+      lines.push("", "*Pix copia e cola:*", inv.pix);
+    }
+    return lines.join("\n");
+  });
+
+  return (
+    `📄 *Faturas*\nCPF/CNPJ: *${maskedDoc}*${who}\n` +
+    `*Quantidade: ${invoices.length}*\n\n` +
+    `${blocks.join("\n\n")}\n\n` +
+    `📎 Em seguida envio o(s) *PDF do boleto* para baixar.\n\n` +
+    `${afterFaturaMessage()}\n\n` +
+    consultationFooter(queriedAt)
+  );
+}
+
+/** Pedido claro: só o campo usuário primeiro. */
 export function askLoginMessage() {
   return askUserOnlyMessage();
 }
 
-/** Pedido claro: só o campo usuário primeiro. */
 export function askUserOnlyMessage() {
   return (
     `🔐 *Acesso ao CRM Unik*\n\n` +
