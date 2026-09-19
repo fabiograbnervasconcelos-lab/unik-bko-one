@@ -1,3 +1,4 @@
+const CPF_FIND_RE = /\b(\d{3}\.?\d{3}\.?\d{3}-?\d{2})\b/;
 const CPF_REGEX = /\b(\d{3}\.?\d{3}\.?\d{3}-?\d{2})\b/g;
 
 function normalizeText(value: string) {
@@ -99,8 +100,52 @@ export function extractOs(rowText: string) {
 export function extractAgenda(rowText: string): { full: string; date: string } | null {
   const match = rowText.match(AGENDA_RE);
   if (!match?.[1]) return null;
-  const period = match[2] ? ` ${match[2].trim()}` : "";
+  const rawPeriod = (match[2] ?? "").trim();
+  const period =
+    rawPeriod && !/^\(?\s*null\s*\)?$/i.test(rawPeriod) ? ` ${rawPeriod}` : "";
   return { full: `${match[1]}${period}`, date: match[1] };
+}
+
+function looksLikePhone(line: string) {
+  return /^\(?\d{2}\)?\s*\d{4,5}-?\d{4}\b/.test(line);
+}
+
+function looksLikeNameLine(line: string) {
+  if (!line || line.length < 3) return false;
+  if (CPF_FIND_RE.test(line)) return false;
+  if (/^#\d+/.test(line)) return false;
+  if (/^\d{2}\/\d{2}\/\d{4}/.test(line)) return false;
+  if (/^P\./i.test(line)) return false;
+  if (/cep:|end\.|bairro:|class\.|plano:|pag:|venc|contrato|bundle/i.test(line)) return false;
+  if (/instalado|agendado|cancelado|quebra|biometr|processando/i.test(line)) return false;
+  if (/^OS\s*:/i.test(line)) return false;
+  if (/^Agen/i.test(line)) return false;
+  if (/^Venda\s*:/i.test(line)) return false;
+  if (looksLikePhone(line)) return false;
+  if (!/[a-zA-ZÀ-ú]{3,}/.test(line)) return false;
+  // Evita pegar só o login do vendedor (uma palavra curta) quando há nome completo perto do CPF
+  return true;
+}
+
+export function guessVendorName(rowText: string) {
+  const lines = rowText
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  // Preferência: nome imediatamente acima do telefone/CPF (coluna Informações)
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!CPF_FIND_RE.test(line) && !looksLikePhone(line)) continue;
+    for (let j = i - 1; j >= Math.max(0, i - 3); j -= 1) {
+      if (looksLikeNameLine(lines[j])) return lines[j].slice(0, 80);
+    }
+  }
+
+  // Fallback: maior linha com cara de nome completo (2+ palavras)
+  const candidates = lines.filter(looksLikeNameLine);
+  const full = candidates.find((line) => line.split(/\s+/).length >= 2);
+  return (full || candidates[0] || "Cliente").slice(0, 80);
 }
 
 export function extractCpf(rowText: string) {
@@ -112,24 +157,6 @@ export function extractCpf(rowText: string) {
 
 export function extractDates(rowText: string) {
   return [...rowText.matchAll(DATE_RE)].map((item) => item[1]);
-}
-
-export function guessVendorName(rowText: string) {
-  const lines = rowText
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !CPF_REGEX.test(line))
-    .filter((line) => !/^#\d+/.test(line))
-    .filter((line) => !/^\d{2}\/\d{2}\/\d{4}/.test(line))
-    .filter((line) => !/^P\./i.test(line))
-    .filter((line) => !/cep:|end\.|bairro:|class\.|plano:|pag:|venc/i.test(line))
-    .filter((line) => !/instalado|agendado|cancelado|quebra|biometr/i.test(line))
-    .filter((line) => !/^OS\s*:/i.test(line))
-    .filter((line) => !/^Agen/i.test(line))
-    .filter((line) => !/^Venda\s*:/i.test(line))
-    .filter((line) => /[a-zA-ZÀ-ú]{3,}/.test(line));
-  return lines[0]?.slice(0, 80) || "Cliente";
 }
 
 export function detectStatus(rowText: string): string | null {

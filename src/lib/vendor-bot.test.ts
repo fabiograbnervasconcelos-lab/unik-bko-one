@@ -47,11 +47,13 @@ test("detectStatus reconhece quebra e ag biometria", () => {
 test("extrai OS, CPF e Agen. (não o #id)", () => {
   const block = `
 #14027
+18/09/2026 - 17:26:45
+ELISANGELA
 JOAO CARLOS DOS SANTOS
+(48) 99999-0000
 591.028.530-00
-Venda: 18/09/2026
-Agen.: 19/09/2026 (Manhã)
 AGENDADO
+Agen.: 19/09/2026 (Manhã)
 OS: 11194391
 `;
   assert.equal(extractOs(block), "11194391");
@@ -61,6 +63,14 @@ OS: 11194391
   assert.equal(row?.os, "11194391");
   assert.equal(row?.agenda, "19/09/2026 (Manhã)");
   assert.equal(row?.cpf, "591.028.530-00");
+  assert.equal(row?.name, "JOAO CARLOS DOS SANTOS");
+});
+
+test("ignora período (null) no Agen.", () => {
+  assert.deepEqual(extractAgenda("Agen.: 19/09/2026 (null)"), {
+    full: "19/09/2026",
+    date: "19/09/2026",
+  });
 });
 
 test("filtra mês vigente pela data de agendamento", () => {
