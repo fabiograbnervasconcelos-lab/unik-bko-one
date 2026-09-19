@@ -67,8 +67,12 @@ export function currentMonthParts(now = new Date()) {
 }
 
 export function formatQueryTimestamp(now = new Date()) {
-  const date = now.toLocaleDateString("pt-BR");
-  const time = now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const date = now.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+  const time = now.toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Sao_Paulo",
+  });
   return `${date} às ${time}`;
 }
 
@@ -399,10 +403,7 @@ export function formatQueryResultMessages(result: VendorQueryResult): string[] {
 
   if (result.kind === "faturas") {
     return [
-      `📄 *Faturas de clientes*\n\n` +
-        `${result.note ?? "Em breve."}\n\n` +
-        `${askMore}\n\n` +
-        footer,
+      askCpfFaturaMessage() + `\n\n` + footer,
     ];
   }
 
