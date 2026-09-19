@@ -234,6 +234,13 @@ async function refreshGroups() {
 }
 
 export async function connectWhatsApp() {
+  if (process.env.DISABLE_WHATSAPP === "1") {
+    setWhatsAppState("disconnected", {
+      whatsappError: "WhatsApp desligado neste ambiente (DISABLE_WHATSAPP=1).",
+    });
+    log("info", "WhatsApp desligado por DISABLE_WHATSAPP=1 (evita roubar a sessão da produção).");
+    return getSnapshot();
+  }
   if (runtime.socket) {
     await waitUntil(12_000, () => {
       const state = getSnapshot().whatsapp;

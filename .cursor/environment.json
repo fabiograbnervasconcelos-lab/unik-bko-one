@@ -5,8 +5,8 @@
   "terminals": [
     {
       "name": "painel",
-      "command": "npm run dev",
-      "description": "Painel em http://127.0.0.1:43147."
+      "command": "DISABLE_WHATSAPP=1 npm run dev",
+      "description": "Painel em http://127.0.0.1:43147 (WhatsApp desligado para não roubar a produção)."
     },
     {
       "name": "tunel",
