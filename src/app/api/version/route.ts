@@ -13,8 +13,12 @@ export async function GET() {
     ok: true,
     gitSha: sha,
     shortSha: sha.slice(0, 12),
+    buildId: "wa-sessao-estavel-20260920",
+    appMode: process.env.APP_MODE || "bko",
     faturaOpcao6: true,
     askCpfOnOption6: true,
+    noEmBreve: true,
+    replySameChat: true,
     timezone: "America/Sao_Paulo",
     builtAt: new Date().toISOString(),
   });
