@@ -36,11 +36,9 @@ export async function POST(request: Request) {
     const text = askUserOnlyMessage();
     const sentTo: string[] = [];
     for (const target of Array.from(new Set(targets))) {
-      if (target.includes("@")) {
-        await destroyVendorSession(target, { logout: true }).catch(() => undefined);
-        resetVendorToAskLogin(target);
-      }
       const jid = await sendDirectWhatsApp(target, text);
+      await destroyVendorSession(jid, { logout: true }).catch(() => undefined);
+      resetVendorToAskLogin(jid);
       sentTo.push(jid);
     }
 
