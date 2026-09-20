@@ -317,20 +317,61 @@ export function askCoberturaEnderecoMessage(
   );
 }
 
-/** Converte A/B/C (ou 1/2/3 legado) no índice 0-based da lista. */
+export function askCoberturaComplementoMessage(
+  options: Array<{ letter: string; label: string }>,
+  level: number,
+) {
+  const title = level <= 1 ? "Escolha o *complemento*" : "Escolha o *detalhe do complemento*";
+  const lines = options.map((opt) => `*${opt.letter}* — ${opt.label}`);
+  const example =
+    options.length > 26
+      ? `ex.: *A*, *Z* ou *AA*`
+      : `ex.: *A* ou *B*`;
+  return (
+    `📡 ${title}\n\n` +
+    `${lines.join("\n")}\n\n` +
+    `Responda com a *letra* da opção (${example}).\n` +
+    `_Não use 1–8 — isso é do menu._\n` +
+    `_Ou digite *menu* para voltar._`
+  );
+}
+
+/** A=0 … Z=25, AA=26, AB=27 (estilo coluna Excel). */
+export function indexToLetterCode(index: number): string {
+  if (index < 0) return "";
+  let n = index;
+  let out = "";
+  while (n >= 0) {
+    out = String.fromCharCode(65 + (n % 26)) + out;
+    n = Math.floor(n / 26) - 1;
+  }
+  return out;
+}
+
+export function letterCodeToIndex(code: string): number | null {
+  const cleaned = code.trim().toUpperCase();
+  if (!/^[A-Z]+$/.test(cleaned)) return null;
+  let n = 0;
+  for (const ch of cleaned) {
+    n = n * 26 + (ch.charCodeAt(0) - 64);
+  }
+  return n - 1;
+}
+
+/** Converte A/B/AA (ou 1/2/3 legado) no índice 0-based da lista. */
 export function parseCoberturaEnderecoPick(text: string, total: number): number | null {
   const cleaned = text.trim().toUpperCase();
   if (!cleaned || total < 1) return null;
 
-  const letterOnly = cleaned.match(/^([A-Z])(?:\b|[).:\-_]|$)/);
+  const letterOnly = cleaned.match(/^([A-Z]+)(?:\b|[).:\-_]|$)/);
   if (letterOnly) {
-    const index = letterOnly[1].charCodeAt(0) - 65;
-    if (index >= 0 && index < total) return index;
+    const index = letterCodeToIndex(letterOnly[1]);
+    if (index != null && index >= 0 && index < total) return index;
   }
 
   // Compat: ainda aceita 1/2… só dentro da cobertura (não no menu)
   const digits = cleaned.replace(/\D/g, "");
-  if (/^\d{1,2}$/.test(digits)) {
+  if (/^\d{1,3}$/.test(digits)) {
     const pick = Number(digits);
     if (pick >= 1 && pick <= total) return pick - 1;
   }
@@ -341,9 +382,33 @@ export function coberturaEnderecoOptions(
   logradouros: Array<{ descricao?: string; tipoLogradouro?: string; nomeLogradouro?: string }>,
 ) {
   return logradouros.map((item, index) => ({
-    letter: String.fromCharCode(65 + index),
+    letter: indexToLetterCode(index),
     label: item.descricao || `${item.tipoLogradouro || ""} ${item.nomeLogradouro || ""}`.trim(),
   }));
+}
+
+export function coberturaComplementoOptions(
+  options: Array<{ label: string }>,
+) {
+  return options.map((item, index) => ({
+    letter: indexToLetterCode(index),
+    label: item.label,
+  }));
+}
+
+export function formatCoberturaComplementSummary(
+  addressLabel: string,
+  selections: Array<{ descricao?: string; tipo?: string; valor?: string }>,
+) {
+  const comps = selections
+    .map((part) => {
+      const desc = part.descricao || part.tipo || "";
+      const valor = part.valor != null ? String(part.valor) : "";
+      return valor ? `${desc} ${valor}` : desc;
+    })
+    .filter(Boolean);
+  if (!comps.length) return addressLabel;
+  return `${addressLabel}\nComplemento: *${comps.join(" · ")}*`;
 }
 
 export function afterCoberturaMessage() {

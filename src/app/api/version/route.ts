@@ -13,7 +13,7 @@ export async function GET() {
     ok: true,
     gitSha: sha,
     shortSha: sha.slice(0, 12),
-    buildId: "cobertura-ex-gen-20260920",
+    buildId: "cobertura-comp-20260920",
     appMode: process.env.APP_MODE || "bko",
     faturaOpcao6: true,
     askCpfOnOption6: true,

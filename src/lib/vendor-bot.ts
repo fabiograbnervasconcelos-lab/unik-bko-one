@@ -3,21 +3,28 @@ import { runVendorCrmQuery, type VendorQueryKind } from "@/lib/crm-vendor";
 import {
   confirmNioViability,
   emptyCoberturaState,
+  getCombinacaoOptionsForLevel,
+  needsComplementSelection,
   parseCepInput,
   parseHouseNumberInput,
+  selectNioAddress,
   startNioAddressLookup,
+  type NioComplementPart,
 } from "@/lib/nio-cobertura";
 import { log } from "@/lib/store";
 import {
   afterCoberturaMessage,
   askCoberturaCepMessage,
+  askCoberturaComplementoMessage,
   askCoberturaEnderecoMessage,
   askCoberturaNumeroMessage,
   askCpfFaturaMessage,
   askPasswordMessage,
   askUserOnlyMessage,
+  coberturaComplementoOptions,
   coberturaEnderecoOptions,
   declinesCobertura,
+  formatCoberturaComplementSummary,
   formatFaturaText,
   formatQueryResultMessages,
   formatQueryTimestamp,
@@ -173,11 +180,11 @@ async function lookupCoberturaAddresses(jid: string, cep: string, numero: string
       setVendorPhase(jid, "awaiting_cobertura", {
         busy: false,
         cobertura: {
+          ...emptyCoberturaState(),
           step: "done",
           cep,
           numero,
           hash: result.hash,
-          logradouros: [],
         },
       });
       outgoing.push({
@@ -192,6 +199,7 @@ async function lookupCoberturaAddresses(jid: string, cep: string, numero: string
     setVendorPhase(jid, "awaiting_cobertura", {
       busy: false,
       cobertura: {
+        ...emptyCoberturaState(),
         step: "endereco",
         cep,
         numero,
@@ -224,30 +232,50 @@ async function lookupCoberturaAddresses(jid: string, cep: string, numero: string
   }
 }
 
-async function finishCoberturaSelection(jid: string, addressIndex: number) {
+function currentComplementOptions(cobertura: NonNullable<ReturnType<typeof getVendorSession>["cobertura"]>) {
+  return getCombinacaoOptionsForLevel(
+    cobertura.combinacoes,
+    cobertura.complementLevel || 1,
+    cobertura.complementSelections || [],
+  );
+}
+
+async function finishCoberturaViability(
+  jid: string,
+  complementSelections: NioComplementPart[],
+) {
   const session = getVendorSession(jid);
   const cobertura = session.cobertura;
-  if (!cobertura?.hash || !cobertura.logradouros[addressIndex]) {
+  if (!cobertura?.hash || !cobertura.selectedAddressId) {
     return texts(askCoberturaCepMessage());
   }
-  const chosen = cobertura.logradouros[addressIndex];
+  const addressLabel = cobertura.selectedAddressLabel || "endereço selecionado";
   session.busy = true;
-  const outgoing = texts(`⏳ Confirmando viabilidade em:\n*${chosen.descricao}*`);
+  const outgoing = texts(
+    `⏳ Confirmando viabilidade em:\n*${addressLabel}*`,
+  );
   try {
     const viability = await confirmNioViability({
       hash: cobertura.hash,
-      addressId: chosen.addressId,
+      addressId: cobertura.selectedAddressId,
       numero: cobertura.numero || "0",
+      complementSelections,
+      addressAlreadySelected: true,
     });
     setVendorPhase(jid, "awaiting_cobertura", {
       busy: false,
-      cobertura: { ...cobertura, step: "done" },
+      cobertura: {
+        ...cobertura,
+        step: "done",
+        complementSelections,
+      },
     });
+    const location = formatCoberturaComplementSummary(addressLabel, complementSelections);
     if (viability.viavel) {
       const bits = [
         `✅ *Tem Nio Fibra no seu endereço.*`,
         ``,
-        `📍 ${chosen.descricao}`,
+        `📍 ${location}`,
       ];
       if (viability.description) bits.push(viability.description);
       if (viability.maxBandwidth) {
@@ -259,7 +287,7 @@ async function finishCoberturaSelection(jid: string, addressIndex: number) {
       const bits = [
         `❌ *Não tem Nio Fibra no seu endereço.*`,
         ``,
-        `📍 ${chosen.descricao}`,
+        `📍 ${location}`,
       ];
       if (viability.description) bits.push(viability.description);
       bits.push("", afterCoberturaMessage());
@@ -283,6 +311,129 @@ async function finishCoberturaSelection(jid: string, addressIndex: number) {
   } finally {
     getVendorSession(jid).busy = false;
   }
+}
+
+async function finishCoberturaSelection(jid: string, addressIndex: number) {
+  const session = getVendorSession(jid);
+  const cobertura = session.cobertura;
+  if (!cobertura?.hash || !cobertura.logradouros[addressIndex]) {
+    return texts(askCoberturaCepMessage());
+  }
+  const chosen = cobertura.logradouros[addressIndex];
+  session.busy = true;
+  const outgoing = texts(`⏳ Carregando complementos de:\n*${chosen.descricao}*`);
+  try {
+    const selected = await selectNioAddress({
+      hash: cobertura.hash,
+      addressId: chosen.addressId,
+      numero: cobertura.numero || "0",
+    });
+
+    if (!needsComplementSelection(selected.maxNiveis, selected.combinacoes)) {
+      setVendorPhase(jid, "awaiting_cobertura", {
+        busy: false,
+        cobertura: {
+          ...cobertura,
+          selectedAddressId: chosen.addressId,
+          selectedAddressLabel: chosen.descricao,
+          combinacoes: selected.combinacoes,
+          maxNiveis: selected.maxNiveis,
+          complementLevel: 1,
+          complementSelections: [],
+        },
+      });
+      // libera busy antes da viabilidade (ela marca busy de novo)
+      session.busy = false;
+      return finishCoberturaViability(jid, []);
+    }
+
+    const level = 1;
+    const options = getCombinacaoOptionsForLevel(selected.combinacoes, level, []);
+    setVendorPhase(jid, "awaiting_cobertura", {
+      busy: false,
+      cobertura: {
+        ...cobertura,
+        step: "complemento",
+        selectedAddressId: chosen.addressId,
+        selectedAddressLabel: chosen.descricao,
+        combinacoes: selected.combinacoes,
+        maxNiveis: selected.maxNiveis,
+        complementLevel: level,
+        complementSelections: [],
+      },
+    });
+    outgoing.push({
+      kind: "text",
+      text: askCoberturaComplementoMessage(coberturaComplementoOptions(options), level),
+    });
+    return outgoing;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log("error", `Cobertura Nio seleção de endereço falhou: ${message}`);
+    setVendorPhase(jid, "awaiting_cobertura", {
+      busy: false,
+      cobertura: { ...cobertura, step: "endereco" },
+    });
+    outgoing.push({
+      kind: "text",
+      text:
+        `❌ Não consegui carregar os complementos desse endereço.\n` +
+        `Escolha o endereço de novo.\n\n` +
+        askCoberturaEnderecoMessage(coberturaEnderecoOptions(cobertura.logradouros)),
+    });
+    return outgoing;
+  } finally {
+    getVendorSession(jid).busy = false;
+  }
+}
+
+async function handleComplementoPick(jid: string, raw: string): Promise<VendorOutgoing[]> {
+  const session = getVendorSession(jid);
+  const cobertura = session.cobertura || emptyCoberturaState();
+  const level = cobertura.complementLevel || 1;
+  const options = currentComplementOptions(cobertura);
+  if (!options.length) {
+    return finishCoberturaViability(jid, cobertura.complementSelections || []);
+  }
+
+  const pick = parseCoberturaEnderecoPick(raw, options.length);
+  if (pick == null) {
+    return texts(askCoberturaComplementoMessage(coberturaComplementoOptions(options), level));
+  }
+
+  const chosen = options[pick];
+  const nextSelections: NioComplementPart[] = [
+    ...(cobertura.complementSelections || []).slice(0, level - 1),
+    {
+      tipo: chosen.tipo,
+      valor: chosen.valor,
+      descricao: chosen.descricao,
+    },
+  ];
+
+  if (level < (cobertura.maxNiveis || 0) && level < 3) {
+    const nextLevel = level + 1;
+    const nextOptions = getCombinacaoOptionsForLevel(
+      cobertura.combinacoes,
+      nextLevel,
+      nextSelections,
+    );
+    if (nextOptions.length) {
+      setVendorPhase(jid, "awaiting_cobertura", {
+        cobertura: {
+          ...cobertura,
+          step: "complemento",
+          complementLevel: nextLevel,
+          complementSelections: nextSelections,
+        },
+      });
+      return texts(
+        askCoberturaComplementoMessage(coberturaComplementoOptions(nextOptions), nextLevel),
+      );
+    }
+  }
+
+  return finishCoberturaViability(jid, nextSelections);
 }
 
 async function handleCoberturaMessage(jid: string, raw: string): Promise<VendorOutgoing[]> {
@@ -315,13 +466,17 @@ async function handleCoberturaMessage(jid: string, raw: string): Promise<VendorO
     return texts(afterCoberturaMessage());
   }
 
-  // Enquanto escolhe endereço: NÃO interpretar 1/2/7 como menu CRM
+  // Enquanto escolhe endereço / complemento: NÃO interpretar 1/2/7 como menu CRM
   if (cobertura.step === "endereco") {
     const pick = parseCoberturaEnderecoPick(raw, cobertura.logradouros.length);
     if (pick == null) {
       return texts(askCoberturaEnderecoMessage(coberturaEnderecoOptions(cobertura.logradouros)));
     }
     return finishCoberturaSelection(jid, pick);
+  }
+
+  if (cobertura.step === "complemento") {
+    return handleComplementoPick(jid, raw);
   }
 
   if (cobertura.step === "cep") {
