@@ -15,10 +15,19 @@ import { DATA_DIR, ensureDataDirs, WHATSAPP_AUTH_DIR } from "@/lib/paths";
 import { loadSettings } from "@/lib/settings";
 import { getSnapshot, log, setOwnerJid, setWhatsAppState } from "@/lib/store";
 import { isValidateAndSendCommand, onlyDigits, scoreGroupName } from "@/lib/text";
+import {
+  acquireWhatsAppSessionLock,
+  authFilesPresent,
+  hasRegisteredWhatsAppAuth,
+  releaseWhatsAppSessionLock,
+  touchWhatsAppSessionLock,
+} from "@/lib/whatsapp-session-lock";
 
 const logger = pino({ level: "silent" });
 const QR_PNG_PATH = path.join(DATA_DIR, "whatsapp-qr.png");
 const OWNER_JID_PATH = path.join(DATA_DIR, "owner-jid.txt");
+const KEEPALIVE_MS = 4 * 60 * 1000;
+const LOCK_HEARTBEAT_MS = 20_000;
 
 export type WhatsAppTarget = "bko" | "gerentes" | "owner";
 
@@ -28,6 +37,11 @@ type WhatsAppRuntime = {
   shouldReconnect: boolean;
   qrPng: Buffer | null;
   lastCommandAt: number;
+  reconnectAttempt: number;
+  keepaliveTimer?: ReturnType<typeof setInterval>;
+  lockTimer?: ReturnType<typeof setInterval>;
+  shuttingDown: boolean;
+  signalsBound: boolean;
 };
 
 const globalForWa = globalThis as typeof globalThis & {
@@ -40,6 +54,9 @@ const runtime: WhatsAppRuntime = globalForWa.unikBkoWhatsApp ?? {
   shouldReconnect: true,
   qrPng: null,
   lastCommandAt: 0,
+  reconnectAttempt: 0,
+  shuttingDown: false,
+  signalsBound: false,
 };
 
 globalForWa.unikBkoWhatsApp = runtime;
@@ -284,6 +301,76 @@ async function refreshGroups() {
   return mapped;
 }
 
+function stopKeepalive() {
+  if (runtime.keepaliveTimer) {
+    clearInterval(runtime.keepaliveTimer);
+    runtime.keepaliveTimer = undefined;
+  }
+  if (runtime.lockTimer) {
+    clearInterval(runtime.lockTimer);
+    runtime.lockTimer = undefined;
+  }
+}
+
+function startKeepalive() {
+  stopKeepalive();
+  runtime.lockTimer = setInterval(() => {
+    touchWhatsAppSessionLock();
+  }, LOCK_HEARTBEAT_MS);
+  runtime.keepaliveTimer = setInterval(() => {
+    const sock = runtime.socket;
+    if (!sock || getSnapshot().whatsapp !== "connected") return;
+    touchWhatsAppSessionLock();
+    void sock.sendPresenceUpdate("available").catch(() => undefined);
+  }, KEEPALIVE_MS);
+}
+
+function reconnectDelayMs(statusCode: number | undefined) {
+  if (statusCode === DisconnectReason.connectionReplaced) return 12_000;
+  if (statusCode === DisconnectReason.restartRequired) return 1_200;
+  const attempt = Math.min(runtime.reconnectAttempt, 6);
+  return Math.min(30_000, 1_500 * 2 ** attempt);
+}
+
+function scheduleReconnect(statusCode?: number) {
+  if (!runtime.shouldReconnect || runtime.shuttingDown) return;
+  runtime.reconnectAttempt += 1;
+  const delay = reconnectDelayMs(statusCode);
+  log("info", `WhatsApp reconectando em ${Math.round(delay / 1000)}s (código ${statusCode ?? "?"})…`);
+  setTimeout(() => {
+    connectWhatsApp().catch((error) => log("error", String(error)));
+  }, delay);
+}
+
+async function gracefulWhatsAppShutdown(reason: string) {
+  if (runtime.shuttingDown) return;
+  runtime.shuttingDown = true;
+  runtime.shouldReconnect = false;
+  stopKeepalive();
+  log("info", `Encerrando WhatsApp com elegância (${reason})…`);
+  try {
+    await runtime.socket?.end(undefined);
+  } catch {
+    // ignore
+  }
+  runtime.socket = null;
+  runtime.connecting = false;
+  releaseWhatsAppSessionLock();
+}
+
+function bindProcessSignals() {
+  if (runtime.signalsBound) return;
+  runtime.signalsBound = true;
+  const onSignal = (signal: string) => {
+    void gracefulWhatsAppShutdown(signal);
+  };
+  process.once("SIGTERM", () => onSignal("SIGTERM"));
+  process.once("SIGINT", () => onSignal("SIGINT"));
+  process.once("beforeExit", () => {
+    releaseWhatsAppSessionLock();
+  });
+}
+
 export async function connectWhatsApp() {
   if (process.env.DISABLE_WHATSAPP === "1") {
     setWhatsAppState("disconnected", {
@@ -292,6 +379,7 @@ export async function connectWhatsApp() {
     log("info", "WhatsApp desligado por DISABLE_WHATSAPP=1 (evita roubar a sessão da produção).");
     return getSnapshot();
   }
+  if (runtime.shuttingDown) return getSnapshot();
   if (runtime.socket) {
     await waitUntil(12_000, () => {
       const state = getSnapshot().whatsapp;
@@ -309,15 +397,35 @@ export async function connectWhatsApp() {
   }
   runtime.connecting = true;
   runtime.shouldReconnect = true;
+  runtime.shuttingDown = false;
   ensureDataDirs();
+  bindProcessSignals();
+
+  const locked = await acquireWhatsAppSessionLock();
+  if (!locked) {
+    runtime.connecting = false;
+    setWhatsAppState("error", {
+      whatsappError: "Outra instância está usando a sessão WhatsApp. Aguarde o deploy terminar.",
+    });
+    scheduleReconnect(DisconnectReason.connectionReplaced);
+    return getSnapshot();
+  }
 
   try {
+    const hasAuth = hasRegisteredWhatsAppAuth();
+    if (hasAuth) {
+      log("info", "Sessão WhatsApp salva no volume — reconectando sem QR.");
+    } else if (authFilesPresent()) {
+      log("warn", "Arquivos de auth existem, mas sessão não registrada — pode pedir QR.");
+    } else {
+      log("info", "Iniciando sessão WhatsApp. Escaneie o QR com o celular.");
+    }
+
     // Baileys helper — not a React Hook.
     // eslint-disable-next-line react-hooks/rules-of-hooks
     const { state, saveCreds } = await useMultiFileAuthState(WHATSAPP_AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion();
     setWhatsAppState("connecting", { whatsappError: null });
-    log("info", "Iniciando sessão WhatsApp. Escaneie o QR com o celular.");
 
     runtime.socket = makeWASocket({
       version,
@@ -328,6 +436,11 @@ export async function connectWhatsApp() {
       },
       browser: ["Unik BKO", "Chrome", "124.0.0"],
       markOnlineOnConnect: false,
+      syncFullHistory: false,
+      connectTimeoutMs: 60_000,
+      defaultQueryTimeoutMs: 60_000,
+      keepAliveIntervalMs: 25_000,
+      retryRequestDelayMs: 500,
     });
 
     runtime.socket.ev.on("creds.update", saveCreds);
@@ -352,7 +465,10 @@ export async function connectWhatsApp() {
       }
       if (connection === "open") {
         runtime.qrPng = null;
+        runtime.reconnectAttempt = 0;
         setWhatsAppState("connected", { qrDataUrl: null, whatsappError: null });
+        startKeepalive();
+        touchWhatsAppSessionLock();
         const me = runtime.socket?.user?.id ?? "sessão";
         const meDigits = onlyDigits(me.split(":")[0] || me);
         log(
@@ -368,33 +484,51 @@ export async function connectWhatsApp() {
         const statusCode = (lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)
           ?.output?.statusCode;
         const loggedOut = statusCode === DisconnectReason.loggedOut;
+        const replaced = statusCode === DisconnectReason.connectionReplaced;
+        stopKeepalive();
         runtime.socket = null;
         runtime.connecting = false;
+
         if (loggedOut) {
           runtime.qrPng = null;
+          // Só apaga auth em logout real no celular — nunca em queda de rede/deploy.
           fs.rmSync(WHATSAPP_AUTH_DIR, { recursive: true, force: true });
           fs.rmSync(QR_PNG_PATH, { force: true });
+          releaseWhatsAppSessionLock();
           setWhatsAppState("disconnected", {
             qrDataUrl: null,
             groups: [],
             whatsappError: "Sessão encerrada no celular. Gere um QR novo.",
           });
-          log("warn", "WhatsApp deslogou. Vou gerar um QR novo.");
-          if (runtime.shouldReconnect) {
-            setTimeout(() => {
-              connectWhatsApp().catch((error) => log("error", String(error)));
-            }, 1200);
+          log("warn", "WhatsApp deslogou no celular (401). Precisa escanear QR de novo.");
+          if (runtime.shouldReconnect && !runtime.shuttingDown) {
+            scheduleReconnect(statusCode);
           }
           return;
         }
-        // Keep the last QR on screen while Baileys asks for a fresh one.
-        setWhatsAppState(getSnapshot().qrDataUrl ? "qr" : "connecting", { whatsappError: null });
-        log("warn", "WhatsApp renovando o QR...");
-        if (runtime.shouldReconnect) {
-          setTimeout(() => {
-            connectWhatsApp().catch((error) => log("error", String(error)));
-          }, 1500);
+
+        if (replaced) {
+          setWhatsAppState("connecting", {
+            whatsappError: "Outra conexão assumiu a sessão — aguardando e reconectando…",
+          });
+          log("warn", "WhatsApp 440 connectionReplaced (típico no redeploy). Mantendo auth e aguardando.");
+          releaseWhatsAppSessionLock();
+          scheduleReconnect(statusCode);
+          return;
         }
+
+        // Queda transitória: NÃO mostrar QR se a sessão registrada ainda existe.
+        const keepSession = hasRegisteredWhatsAppAuth();
+        setWhatsAppState(keepSession ? "connecting" : getSnapshot().qrDataUrl ? "qr" : "connecting", {
+          whatsappError: null,
+        });
+        log(
+          "warn",
+          keepSession
+            ? `WhatsApp caiu (${statusCode ?? "?"}) — reconectando com sessão salva (sem apagar auth).`
+            : `WhatsApp caiu (${statusCode ?? "?"}) — reconectando…`,
+        );
+        scheduleReconnect(statusCode);
       }
     });
 
@@ -408,6 +542,7 @@ export async function connectWhatsApp() {
     const message = error instanceof Error ? error.message : String(error);
     setWhatsAppState("error", { whatsappError: message });
     log("error", `Falha ao iniciar WhatsApp: ${message}`);
+    scheduleReconnect(undefined);
   } finally {
     runtime.connecting = false;
   }
@@ -437,6 +572,7 @@ export async function getQrPng(): Promise<Buffer | null> {
 
 export async function disconnectWhatsApp() {
   runtime.shouldReconnect = false;
+  stopKeepalive();
   try {
     await runtime.socket?.end(undefined);
   } catch {
@@ -445,6 +581,7 @@ export async function disconnectWhatsApp() {
   runtime.socket = null;
   runtime.connecting = false;
   runtime.qrPng = null;
+  releaseWhatsAppSessionLock();
   setWhatsAppState("disconnected", { qrDataUrl: null, groups: [] });
 }
 
@@ -458,7 +595,17 @@ export async function regenerateWhatsAppQr() {
   // Pequena pausa para o socket antigo soltar de vez.
   await new Promise((resolve) => setTimeout(resolve, 800));
   runtime.shouldReconnect = true;
+  runtime.shuttingDown = false;
+  runtime.reconnectAttempt = 0;
   return connectWhatsApp();
+}
+
+export function getWhatsAppAuthMeta() {
+  return {
+    authPresent: authFilesPresent(),
+    authRegistered: hasRegisteredWhatsAppAuth(),
+    volumeMount: process.env.RAILWAY_VOLUME_MOUNT_PATH || null,
+  };
 }
 
 async function resolveOwnerSendJids() {

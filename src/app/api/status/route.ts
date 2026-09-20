@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { loadSettings } from "@/lib/settings";
 import { getSnapshot } from "@/lib/store";
 import { listVendorSessions, vendorSessionCount } from "@/lib/vendor-session";
+import { getWhatsAppAuthMeta } from "@/lib/whatsapp";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,7 @@ export async function GET() {
     hasQr: Boolean(snapshot.qrDataUrl),
     settings,
     deploy: deployMeta(),
+    whatsappAuth: getWhatsAppAuthMeta(),
     vendorBot: {
       loggedIn: vendorSessionCount(),
       sessions: listVendorSessions(),
