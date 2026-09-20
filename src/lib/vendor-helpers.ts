@@ -288,7 +288,7 @@ export function askCoberturaCepMessage() {
   return (
     `📡 *Cobertura Nio Fibra*\n\n` +
     `Envie o *CEP* do endereço (8 dígitos).\n` +
-    `Exemplo: \`89056161\` ou \`89056-161\`\n\n` +
+    `Exemplo: \`88888888\` ou \`88888-888\`\n\n` +
     `_Digite *menu* para voltar ou *8* para encerrar._`
   );
 }
@@ -299,7 +299,7 @@ export function askCoberturaNumeroMessage(cep: string) {
     `📡 *Cobertura Nio Fibra*\n\n` +
     `CEP: *${masked}*\n\n` +
     `Agora envie o *número* da casa/prédio.\n` +
-    `Exemplo: \`369\`\n\n` +
+    `Exemplo: \`888\`\n\n` +
     `_Se não tiver número, mande *SN*._`
   );
 }
