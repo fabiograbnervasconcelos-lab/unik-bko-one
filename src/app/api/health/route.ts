@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isWhatsAppCrmMode } from "@/lib/app-mode";
 
 export const dynamic = "force-dynamic";
 
@@ -19,13 +20,15 @@ export async function GET() {
     process.env.GIT_SHA ||
     process.env.BUILD_SHA ||
     "local";
+  const vendorBot =
+    isWhatsAppCrmMode() && process.env.DISABLE_VENDOR_BOT !== "1";
   return cors(
     NextResponse.json({
       ok: true,
       ts: Date.now(),
       gitSha: sha.slice(0, 12),
       features: {
-        vendorBot: true,
+        vendorBot,
         faturaOpcao6: true,
         faturaRoboUrl:
           process.env.FATURA_ROBO_URL ||

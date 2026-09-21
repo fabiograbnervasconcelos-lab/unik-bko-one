@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "node scripts/start.mjs",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test src/lib/text.test.ts src/lib/vendor-bot.test.ts src/lib/vendor-session.test.ts src/lib/nio-cobertura.test.ts"
+    "test": "node --experimental-strip-types --test src/lib/text.test.ts src/lib/vendor-bot.test.ts src/lib/vendor-session.test.ts src/lib/nio-cobertura.test.ts src/lib/robot-phone.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

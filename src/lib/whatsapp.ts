@@ -10,8 +10,16 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import QRCode from "qrcode";
 import pino from "pino";
+import { isWhatsAppCrmMode } from "@/lib/app-mode";
 import { defaultOwnerJid, isOwnerDirectChat, ownerDigits } from "@/lib/owner";
 import { DATA_DIR, ensureDataDirs, WHATSAPP_AUTH_DIR } from "@/lib/paths";
+import {
+  formatBkoPhoneDisplay,
+  formatRobotPhoneDisplay,
+  isAllowedBkoNumber,
+  isAllowedRobotNumber,
+  robotDigits,
+} from "@/lib/robot-phone";
 import { loadSettings } from "@/lib/settings";
 import { getSnapshot, log, setOwnerJid, setWhatsAppState } from "@/lib/store";
 import { isValidateAndSendCommand, onlyDigits, scoreGroupName } from "@/lib/text";
@@ -230,10 +238,20 @@ async function handleIncomingCommand(message: WAMessage) {
     return;
   }
 
-  // Vendedores (e o dono, se não for o comando BKO): fluxo CRM por WhatsApp
-  if (process.env.DISABLE_VENDOR_BOT === "1") {
+  // Bot de vendedores: só no app whatsapp-crm e só no 48 99645-0101
+  if (!isVendorBotEnabled()) {
     return;
   }
+
+  const me = runtime.socket?.user?.id;
+  if (!isAllowedRobotNumber(me)) {
+    log(
+      "warn",
+      `Ignorando DM de vendedor: sessão conectada como ${me || "?"} (robô permitido: ${robotDigits()}).`,
+    );
+    return;
+  }
+
   log(
     "info",
     `Mensagem vendedor de ${replyJid}` +
@@ -257,6 +275,13 @@ async function handleIncomingCommand(message: WAMessage) {
       "❌ Deu erro interno. Pode tentar novamente em instantes?",
     );
   }
+}
+
+/** Bot CRM/vendedores só no modo whatsapp-crm (nunca no painel BKO do 47). */
+export function isVendorBotEnabled() {
+  if (process.env.DISABLE_VENDOR_BOT === "1") return false;
+  if (!isWhatsAppCrmMode()) return false;
+  return true;
 }
 
 async function saveQr(qr: string) {
@@ -475,6 +500,30 @@ export async function connectWhatsApp() {
           "info",
           `WhatsApp conectado como ${me}. Número do robô: ${meDigits || "desconhecido"}. Avisos nos grupos + cópia de validação no 48 99194-0908.`,
         );
+        if (isWhatsAppCrmMode() && !isAllowedRobotNumber(me)) {
+          log(
+            "error",
+            `Sessão WhatsApp CRM no número errado (${meDigits}). Use o celular ${formatRobotPhoneDisplay()} (${robotDigits()}). Bot de vendedores bloqueado.`,
+          );
+          setWhatsAppState("error", {
+            whatsappError: `Conectado no número errado. Escaneie o QR com ${formatRobotPhoneDisplay()}.`,
+          });
+        } else if (isWhatsAppCrmMode()) {
+          log("info", `Bot de vendedores ativo só neste número: ${formatRobotPhoneDisplay()}.`);
+        } else if (!isAllowedBkoNumber(me)) {
+          log(
+            "error",
+            `Sessão BKO no número errado (${meDigits}). Este app deve usar ${formatBkoPhoneDisplay()}.`,
+          );
+          setWhatsAppState("error", {
+            whatsappError: `Conectado no número errado. Escaneie o QR com ${formatBkoPhoneDisplay()}.`,
+          });
+        } else {
+          log(
+            "info",
+            `Modo BKO no ${formatBkoPhoneDisplay()}: alertas nos grupos — bot de vendedores desligado neste app.`,
+          );
+        }
         await refreshGroups().catch((error) => {
           log("warn", `Não consegui listar os grupos: ${String(error)}`);
         });
