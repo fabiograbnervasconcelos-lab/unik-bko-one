@@ -23,7 +23,8 @@ export type VendorQueryKind =
   | "quebra"
   | "cancelados"
   | "biometria"
-  | "faturas";
+  | "faturas"
+  | "cobertura";
 
 export type VendorCrmRow = {
   name: string;
@@ -254,7 +255,8 @@ export function menuMessage(crmUser?: string | null, queriedAt = formatQueryTime
     `4️⃣ Cancelados do mês\n` +
     `5️⃣ Ag. biometria\n` +
     `6️⃣ Faturas clientes\n` +
-    `7️⃣ Encerrar e deslogar\n\n` +
+    `7️⃣ Cobertura Nio Fibra\n` +
+    `8️⃣ Encerrar e deslogar\n\n` +
     consultationFooter(queriedAt)
   );
 }
@@ -268,8 +270,8 @@ export function askCpfFaturaMessage() {
     `📄 *Faturas de clientes*\n\n` +
     `Envie o *CPF* (ou CNPJ) do cliente em qualquer formato.\n` +
     `Exemplos: \`591.028.530-00\` ou \`59102853000\`\n\n` +
-    `_Digite *7* para encerrar ou *1–5* para outras opções._\n` +
-    `_v-fatura-6_`
+    `_Digite *8* para encerrar ou *1–7* para outras opções._\n` +
+    `_build-fatura6-20260919_`
   );
 }
 
@@ -277,9 +279,166 @@ export function afterFaturaMessage() {
   return (
     `Precisa de mais alguma coisa?\n` +
     `• Envie *outro CPF* para nova fatura\n` +
-    `• Digite *1–5* para outras consultas do CRM\n` +
-    `• Digite *7* para encerrar`
+    `• Digite *1–7* para outras consultas\n` +
+    `• Digite *8* para encerrar`
   );
+}
+
+export function askCoberturaCepMessage() {
+  return (
+    `📡 *Cobertura Nio Fibra*\n\n` +
+    `Envie o *CEP* do endereço (8 dígitos).\n` +
+    `Exemplo: \`88888888\` ou \`88888-888\`\n\n` +
+    `_Digite *menu* para voltar ou *8* para encerrar._`
+  );
+}
+
+export function askCoberturaNumeroMessage(cep: string) {
+  const masked = cep.replace(/(\d{5})(\d{3})/, "$1-$2");
+  return (
+    `📡 *Cobertura Nio Fibra*\n\n` +
+    `CEP: *${masked}*\n\n` +
+    `Agora envie o *número* da casa/prédio.\n` +
+    `Exemplo: \`888\`\n\n` +
+    `_Se não tiver número, mande *SN*._`
+  );
+}
+
+export function askCoberturaEnderecoMessage(
+  options: Array<{ letter: string; label: string }>,
+) {
+  const lines = options.map((opt) => `*${opt.letter}* — ${opt.label}`);
+  return (
+    `📡 *Escolha o endereço*\n\n` +
+    `${lines.join("\n")}\n\n` +
+    `Responda com a *letra* da opção (ex.: *A* ou *B*).\n` +
+    `_Não use 1–8 — isso é do menu._\n` +
+    `_Ou digite *menu* para voltar._`
+  );
+}
+
+export function askCoberturaComplementoMessage(
+  options: Array<{ letter: string; label: string }>,
+  level: number,
+) {
+  const title = level <= 1 ? "Escolha o *complemento*" : "Escolha o *detalhe do complemento*";
+  const lines = options.map((opt) => `*${opt.letter}* — ${opt.label}`);
+  const example =
+    options.length > 26
+      ? `ex.: *A*, *Z* ou *AA*`
+      : `ex.: *A* ou *B*`;
+  return (
+    `📡 ${title}\n\n` +
+    `${lines.join("\n")}\n\n` +
+    `Responda com a *letra* da opção (${example}).\n` +
+    `_Não use 1–8 — isso é do menu._\n` +
+    `_Ou digite *menu* para voltar._`
+  );
+}
+
+/** A=0 … Z=25, AA=26, AB=27 (estilo coluna Excel). */
+export function indexToLetterCode(index: number): string {
+  if (index < 0) return "";
+  let n = index;
+  let out = "";
+  while (n >= 0) {
+    out = String.fromCharCode(65 + (n % 26)) + out;
+    n = Math.floor(n / 26) - 1;
+  }
+  return out;
+}
+
+export function letterCodeToIndex(code: string): number | null {
+  const cleaned = code.trim().toUpperCase();
+  if (!/^[A-Z]+$/.test(cleaned)) return null;
+  let n = 0;
+  for (const ch of cleaned) {
+    n = n * 26 + (ch.charCodeAt(0) - 64);
+  }
+  return n - 1;
+}
+
+/** Converte A/B/AA (ou 1/2/3 legado) no índice 0-based da lista. */
+export function parseCoberturaEnderecoPick(text: string, total: number): number | null {
+  const cleaned = text.trim().toUpperCase();
+  if (!cleaned || total < 1) return null;
+
+  const letterOnly = cleaned.match(/^([A-Z]+)(?:\b|[).:\-_]|$)/);
+  if (letterOnly) {
+    const index = letterCodeToIndex(letterOnly[1]);
+    if (index != null && index >= 0 && index < total) return index;
+  }
+
+  // Compat: ainda aceita 1/2… só dentro da cobertura (não no menu)
+  const digits = cleaned.replace(/\D/g, "");
+  if (/^\d{1,3}$/.test(digits)) {
+    const pick = Number(digits);
+    if (pick >= 1 && pick <= total) return pick - 1;
+  }
+  return null;
+}
+
+export function coberturaEnderecoOptions(
+  logradouros: Array<{ descricao?: string; tipoLogradouro?: string; nomeLogradouro?: string }>,
+) {
+  return logradouros.map((item, index) => ({
+    letter: indexToLetterCode(index),
+    label: item.descricao || `${item.tipoLogradouro || ""} ${item.nomeLogradouro || ""}`.trim(),
+  }));
+}
+
+export function coberturaComplementoOptions(
+  options: Array<{ label: string }>,
+) {
+  return options.map((item, index) => ({
+    letter: indexToLetterCode(index),
+    label: item.label,
+  }));
+}
+
+export function formatCoberturaComplementSummary(
+  addressLabel: string,
+  selections: Array<{ descricao?: string; tipo?: string; valor?: string }>,
+) {
+  const comps = selections
+    .map((part) => {
+      const desc = part.descricao || part.tipo || "";
+      const valor = part.valor != null ? String(part.valor) : "";
+      return valor ? `${desc} ${valor}` : desc;
+    })
+    .filter(Boolean);
+  if (!comps.length) return addressLabel;
+  return `${addressLabel}\nComplemento: *${comps.join(" · ")}*`;
+}
+
+export function afterCoberturaMessage() {
+  return (
+    `Quer consultar *outra cobertura*?\n\n` +
+    `*S* — Sim, consultar outro CEP\n` +
+    `*N* — Não, voltar ao menu\n` +
+    `*8* — Encerrar sessão`
+  );
+}
+
+/** Normaliza texto curto de sim/não (sem acento). */
+function normalizeShortReply(text: string) {
+  return text
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .trim()
+    .toLowerCase();
+}
+
+/** S / sim / outra → nova consulta de cobertura. */
+export function wantsAnotherCobertura(text: string) {
+  const t = normalizeShortReply(text);
+  return /^(s|sim|ss|outra|outro|novo|nova)$/.test(t);
+}
+
+/** N / nao / nao quero → sair da cobertura e voltar ao menu. */
+export function declinesCobertura(text: string) {
+  const t = normalizeShortReply(text);
+  return /^(n|nao|nop|no|nunca|cancelar|cancela)$/.test(t);
 }
 
 /** Aceita CPF (11) ou CNPJ (14) em qualquer máscara. */
@@ -368,7 +527,13 @@ export function askPasswordMessage(user: string) {
   );
 }
 
-export function loginErrorMessage() {
+export function loginErrorMessage(user?: string | null) {
+  if (user) {
+    return (
+      `❌ Não consegui entrar no CRM com o usuário *${user}*.\n\n` +
+      `Envie a *senha* de novo (ou mande \`usuario\` e \`senha\` em duas linhas).`
+    );
+  }
   return (
     `❌ Não consegui entrar no CRM com esses dados.\n\n` +
     `Pode tentar de novo?\n` +
@@ -400,7 +565,7 @@ export function formatQueryResultMessages(result: VendorQueryResult): string[] {
   const footer = consultationFooter(queriedAt);
   const askMore =
     `Precisa de mais alguma informação?\n` +
-    `Digite *1–6* para outra busca ou *7* para encerrar.`;
+    `Digite *1–7* para outra busca ou *8* para encerrar.`;
 
   if (result.kind === "faturas") {
     return [
@@ -455,15 +620,19 @@ export function optionFromText(text: string): VendorQueryKind | "encerrar" | nul
     .replace(/4️⃣/g, "4")
     .replace(/5️⃣/g, "5")
     .replace(/6️⃣/g, "6")
-    .replace(/7️⃣/g, "7");
+    .replace(/7️⃣/g, "7")
+    .replace(/8️⃣/g, "8");
   if (!cleaned) return null;
-  if (/^7\b/.test(cleaned) || /^(encerrar|sair|logout|deslogar)\b/.test(cleaned)) return "encerrar";
+  if (/^8\b/.test(cleaned) || /^(encerrar|sair|logout|deslogar)\b/.test(cleaned)) {
+    return "encerrar";
+  }
   if (/^1\b/.test(cleaned) || /^instalad/.test(cleaned)) return "instalados";
   if (/^2\b/.test(cleaned) || /^agendad/.test(cleaned)) return "agendados";
   if (/^3\b/.test(cleaned) || /quebra/.test(cleaned)) return "quebra";
   if (/^4\b/.test(cleaned) || /^cancelad/.test(cleaned)) return "cancelados";
   if (/^5\b/.test(cleaned) || /biometr/.test(cleaned)) return "biometria";
   if (/^6\b/.test(cleaned) || /fatura/.test(cleaned)) return "faturas";
+  if (/^7\b/.test(cleaned) || /^(cobertura)\b/.test(cleaned)) return "cobertura";
   return null;
 }
 
