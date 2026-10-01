@@ -292,7 +292,8 @@ export function askCpfVendaMessage() {
     `Envie o *CPF* (ou CNPJ) do cliente para lançar a última venda do PAP na pré-venda NIO.\n` +
     `Exemplos: \`591.028.530-00\` ou \`59102853000\`\n\n` +
     `_O vendedor do CRM será *o seu login*._\n` +
-    `_Digite *menu* para voltar ou *9* para encerrar._`
+    `_Digite *menu* para voltar ou *9* para encerrar._\n` +
+    `_build-venda8-20261001_`
   );
 }
 

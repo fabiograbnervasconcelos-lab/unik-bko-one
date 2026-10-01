@@ -13,7 +13,7 @@ export async function GET() {
     ok: true,
     gitSha: sha,
     shortSha: sha.slice(0, 12),
-    buildId: "separacao-bko-crm-20260922",
+    buildId: "venda-opcao8-20261001",
     robotWhatsapp: "48996450101",
     bkoWhatsapp: "47997860234",
     vendorBotOnlyOnCrm: true,
@@ -25,6 +25,7 @@ export async function GET() {
     noEmBreve: true,
     replySameChat: true,
     timezone: "America/Sao_Paulo",
+    redeployBump: "venda8-20261001",
     builtAt: new Date().toISOString(),
   });
 }
