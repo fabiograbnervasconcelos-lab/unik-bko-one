@@ -204,7 +204,8 @@ export async function runVendorCrmQuery(page: Page, kind: VendorQueryKind): Prom
     return withMeta(kind, "Instalados", await collectBySearch(page, CRM_NIO_HISTORICO, "instalado", kind), label);
   }
   if (kind === "agendados") {
-    return withMeta(kind, "Agendados", await collectBySearch(page, CRM_NIO_HISTORICO, "agendado", kind), label);
+    // Todos os agendados, sem filtro de mês
+    return withMeta(kind, "Agendados", await collectBySearch(page, CRM_NIO_HISTORICO, "agendado", kind), null);
   }
   if (kind === "quebra") {
     return withMeta(
@@ -215,7 +216,8 @@ export async function runVendorCrmQuery(page: Page, kind: VendorQueryKind): Prom
     );
   }
   if (kind === "cancelados") {
-    return withMeta(kind, "Cancelados", await collectBySearch(page, CRM_NIO_HISTORICO, "cancelado", kind), label);
+    // Todos os cancelados, sem filtro de mês
+    return withMeta(kind, "Cancelados", await collectBySearch(page, CRM_NIO_HISTORICO, "cancelado", kind), null);
   }
   return withMeta(kind, "Ag. biometria", await collectBySearch(page, CRM_NIO_PREVENDA, "biometria", kind), null);
 }
