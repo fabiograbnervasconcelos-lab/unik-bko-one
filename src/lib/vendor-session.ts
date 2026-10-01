@@ -15,9 +15,12 @@ export type VendorPhase =
   | "busy";
 
 export type VendorVendaState = {
-  step: "pap_user" | "pap_pass" | "cpf";
+  step: "pap_user" | "pap_pass" | "loading_sellers" | "cpf";
   papMatricula: string | null;
   papSenha: string | null;
+  /** Id do vendedor no CRM (lista do PAP), casado com o login do WhatsApp. */
+  vendedorId: string | null;
+  vendedorNome: string | null;
 };
 
 export type VendorSession = {

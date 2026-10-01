@@ -50,6 +50,21 @@ export function papCredentialsFromEnv() {
   return { matricula, senha };
 }
 
+/**
+ * Login do CRM usado pelo nio-pap-crm para "Carregar vendedores" / lançar
+ * (ex.: fabio) — não é o nome do vendedor da venda.
+ */
+export function papCrmOperatorFromEnv() {
+  const usuario = (
+    process.env.NIO_PAP_CRM_USUARIO ||
+    process.env.CRM_USUARIO ||
+    ""
+  ).trim();
+  const senha = (process.env.NIO_PAP_CRM_SENHA || process.env.CRM_SENHA || "").trim();
+  if (!usuario || !senha) return null;
+  return { usuario, senha };
+}
+
 export function papDiasDefault() {
   const raw = Number(process.env.NIO_PAP_DIAS || "30");
   if (!Number.isFinite(raw)) return 30;
