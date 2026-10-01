@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isWhatsAppCrmMode } from "@/lib/app-mode";
 import { DATA_DIR, ensureDataDirs } from "@/lib/paths";
 import { loadSettings } from "@/lib/settings";
 import { getSnapshot, log, setHourlyNote } from "@/lib/store";
@@ -68,6 +69,13 @@ export function startBackgroundServices() {
   if (slot.started) return;
   slot.started = true;
   slot.startedAt = Date.now();
+
+  if (isWhatsAppCrmMode()) {
+    log("info", "Modo WhatsApp CRM: só robô de vendedores (sem leitura horária GED).");
+    void connectWhatsApp().catch((error) => log("error", String(error)));
+    return;
+  }
+
   log("info", "Serviços de fundo: WhatsApp + leitura de hora em hora no 48 99194-0908.");
   void connectWhatsApp().catch((error) => log("error", String(error)));
   slot.timer = setInterval(() => {

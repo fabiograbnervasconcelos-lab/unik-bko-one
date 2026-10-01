@@ -27,6 +27,11 @@ type StatusPayload = AppSnapshot & {
   settings: AppSettings;
   hasQr?: boolean;
   vendorBot?: VendorBotStatus;
+  deploy?: {
+    gitSha?: string;
+    faturaOpcao6?: boolean;
+    timezone?: string;
+  };
 };
 
 const EMPTY_RESULTS: LeadResult[] = [];
@@ -401,9 +406,28 @@ export function Dashboard() {
           ) : (
             <Badge variant="secondary">Leitura automática a cada 1 hora</Badge>
           )}
+          {snapshot?.deploy?.gitSha ? (
+            <Badge variant="outline">build {snapshot.deploy.gitSha}</Badge>
+          ) : null}
+          {snapshot?.deploy?.faturaOpcao6 ? (
+            <Badge variant="default">fatura opção 6</Badge>
+          ) : null}
         </div>
         </div>
       </header>
+
+      {snapshot && !snapshot.deploy?.faturaOpcao6 ? (
+        <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+          Este servidor ainda está em uma build antiga (sem fatura opção 6). No Railway:
+          serviço → Settings → Source com branch <strong>main</strong> → Deployments →{" "}
+          <strong>Deploy</strong> → <strong>Deploy latest commit</strong> (não use Redeploy
+          numa deployment velha). Depois confira{" "}
+          <a className="underline" href="/api/version" target="_blank" rel="noreferrer">
+            /api/version
+          </a>{" "}
+          com <code>faturaOpcao6: true</code>.
+        </div>
+      ) : null}
 
       {notice ? (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm">
