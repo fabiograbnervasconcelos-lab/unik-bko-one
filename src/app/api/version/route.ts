@@ -13,7 +13,7 @@ export async function GET() {
     ok: true,
     gitSha: sha,
     shortSha: sha.slice(0, 12),
-    buildId: "venda-opcao8-sellers-20261001",
+    buildId: "status-todos-2a5-20261001",
     robotWhatsapp: "48996450101",
     bkoWhatsapp: "47997860234",
     vendorBotOnlyOnCrm: true,

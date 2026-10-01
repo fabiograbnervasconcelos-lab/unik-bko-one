@@ -74,9 +74,9 @@ test("ignora período (null) no Agen.", () => {
   });
 });
 
-test("filtra mês vigente pela data de agendamento", () => {
+test("filtra mês vigente só em instalados; 2–5 trazem todos", () => {
   const now = new Date(2026, 8, 19);
-  const rows = [
+  const instalados = [
     {
       name: "A",
       os: "1",
@@ -98,7 +98,43 @@ test("filtra mês vigente pela data de agendamento", () => {
       raw: "",
     },
   ];
-  assert.equal(filterRows("instalados", rows, now).length, 1);
+  const agendados = [
+    {
+      name: "C",
+      os: "3",
+      cpf: null,
+      status: "agendado",
+      agenda: "10/07/2026 (Manhã)",
+      agendaDate: "10/07/2026",
+      date: "10/07/2026",
+      raw: "",
+    },
+    {
+      name: "D",
+      os: "4",
+      cpf: null,
+      status: "agendado",
+      agenda: "10/09/2026 (Tarde)",
+      agendaDate: "10/09/2026",
+      date: "10/09/2026",
+      raw: "",
+    },
+  ];
+  const cancelados = [
+    {
+      name: "E",
+      os: "5",
+      cpf: null,
+      status: "cancelado",
+      agenda: null,
+      agendaDate: null,
+      date: "01/01/2025",
+      raw: "",
+    },
+  ];
+  assert.equal(filterRows("instalados", instalados, now).length, 1);
+  assert.equal(filterRows("agendados", agendados, now).length, 2);
+  assert.equal(filterRows("cancelados", cancelados, now).length, 1);
   assert.equal(dateInCurrentMonth("19/09/2026", now), true);
 });
 
