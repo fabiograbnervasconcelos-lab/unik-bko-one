@@ -11,14 +11,27 @@ import {
   startNioAddressLookup,
   type NioComplementPart,
 } from "@/lib/nio-cobertura";
+import {
+  formatVendaLancadaMessage,
+  listNioPapSellers,
+  matchSellerByCrmUser,
+  papCredentialsFromEnv,
+  papDiasDefault,
+  syncNioPapVenda,
+  vendaFoiLancada,
+} from "@/lib/nio-pap-crm";
 import { log } from "@/lib/store";
 import {
   afterCoberturaMessage,
+  afterVendaMessage,
   askCoberturaCepMessage,
   askCoberturaComplementoMessage,
   askCoberturaEnderecoMessage,
   askCoberturaNumeroMessage,
   askCpfFaturaMessage,
+  askCpfVendaMessage,
+  askPapMatriculaMessage,
+  askPapSenhaMessage,
   askPasswordMessage,
   askUserOnlyMessage,
   coberturaComplementoOptions,
@@ -43,6 +56,7 @@ import {
   getVendorSession,
   openVendorCrm,
   setVendorPhase,
+  type VendorVendaState,
 } from "@/lib/vendor-session";
 
 export {
@@ -80,6 +94,7 @@ async function tryLogin(jid: string, user: string, pass: string): Promise<Vendor
     setVendorPhase(jid, "awaiting_pass", {
       busy: false,
       crmUser: null,
+      crmPass: null,
       pendingUser: user,
     });
     outgoing.push(...texts(loginErrorMessage(user)));
@@ -154,13 +169,232 @@ async function runFaturaLookup(jid: string, docDigits: string): Promise<VendorOu
       text:
         `❌ Não consegui consultar a fatura agora.\n` +
         `${message}\n\n` +
-        `Envie o CPF novamente ou digite *1–7* / *8*.`,
+        `Envie o CPF novamente ou digite *1–8* / *9*.`,
     });
     return outgoing;
   } finally {
     const current = getVendorSession(jid);
     current.busy = false;
   }
+}
+
+function emptyVendaState(patch: Partial<VendorVendaState> = {}): VendorVendaState {
+  return {
+    step: "cpf",
+    papMatricula: null,
+    papSenha: null,
+    ...patch,
+  };
+}
+
+function startVendaFlow(jid: string): VendorOutgoing[] {
+  const envPap = papCredentialsFromEnv();
+  if (envPap) {
+    setVendorPhase(jid, "awaiting_venda", {
+      cobertura: null,
+      venda: emptyVendaState({
+        step: "cpf",
+        papMatricula: envPap.matricula,
+        papSenha: envPap.senha,
+      }),
+    });
+    return texts(askCpfVendaMessage());
+  }
+
+  const session = getVendorSession(jid);
+  if (session.venda?.papMatricula && session.venda?.papSenha) {
+    setVendorPhase(jid, "awaiting_venda", {
+      cobertura: null,
+      venda: emptyVendaState({
+        step: "cpf",
+        papMatricula: session.venda.papMatricula,
+        papSenha: session.venda.papSenha,
+      }),
+    });
+    return texts(askCpfVendaMessage());
+  }
+
+  setVendorPhase(jid, "awaiting_venda", {
+    cobertura: null,
+    venda: emptyVendaState({ step: "pap_user" }),
+  });
+  return texts(askPapMatriculaMessage());
+}
+
+async function runVendaLaunch(jid: string, docDigits: string): Promise<VendorOutgoing[]> {
+  const session = getVendorSession(jid);
+  const crmUser = session.crmUser;
+  const crmPass = session.crmPass;
+  const venda = session.venda || emptyVendaState();
+  const papMatricula = venda.papMatricula || papCredentialsFromEnv()?.matricula || null;
+  const papSenha = venda.papSenha || papCredentialsFromEnv()?.senha || null;
+
+  if (!crmUser || !crmPass) {
+    setVendorPhase(jid, "need_login", { busy: false, venda: null });
+    return texts(
+      `⚠️ Preciso da senha do CRM para lançar a venda.\n` +
+        `Envie o *usuário* do CRM para entrar de novo.`,
+    );
+  }
+  if (!papMatricula || !papSenha) {
+    setVendorPhase(jid, "awaiting_venda", {
+      busy: false,
+      venda: emptyVendaState({ step: "pap_user" }),
+    });
+    return texts(askPapMatriculaMessage());
+  }
+
+  session.busy = true;
+  const dias = papDiasDefault();
+  const outgoing: VendorOutgoing[] = texts(
+    `⏳ Lançando a venda no PAP → CRM…\n` +
+      `Documento: *${docDigits}*\n` +
+      `Vendedor: *${crmUser}*\n` +
+      `_Última venda dos últimos ${dias} dias._`,
+  );
+
+  try {
+    const sellers = await listNioPapSellers({ crmUsuario: crmUser, crmSenha: crmPass });
+    const seller = matchSellerByCrmUser(sellers, crmUser);
+    if (!seller) {
+      setVendorPhase(jid, "awaiting_venda", {
+        busy: false,
+        venda: { ...venda, step: "cpf" },
+      });
+      outgoing.push({
+        kind: "text",
+        text:
+          `❌ Não achei o vendedor *${crmUser}* na lista do CRM/PAP.\n` +
+          `Confira se o login é o mesmo nome do vendedor na pré-venda.\n\n` +
+          afterVendaMessage(),
+      });
+      return outgoing;
+    }
+
+    const result = await syncNioPapVenda({
+      documento: docDigits,
+      dias,
+      vendedorId: seller.id,
+      papMatricula,
+      papSenha,
+      crmUsuario: crmUser,
+      crmSenha: crmPass,
+    });
+
+    setVendorPhase(jid, "awaiting_venda", {
+      busy: false,
+      venda: {
+        step: "cpf",
+        papMatricula,
+        papSenha,
+      },
+    });
+
+    if (!result.encontrados || !result.escolhida) {
+      outgoing.push({
+        kind: "text",
+        text:
+          `❌ Nenhuma venda de *${result.documento || docDigits}* nos últimos *${result.dias || dias}* dias no PAP.\n\n` +
+          afterVendaMessage(),
+      });
+      return outgoing;
+    }
+
+    if (vendaFoiLancada(result)) {
+      outgoing.push({
+        kind: "text",
+        text: `${formatVendaLancadaMessage(result)}\n\n${afterVendaMessage()}`,
+      });
+      return outgoing;
+    }
+
+    const first = result.resultados?.[0] || result.escolhida;
+    const detail =
+      first?.error ||
+      first?.skipped ||
+      result.resumoWhatsapp ||
+      "O sistema não confirmou o lançamento da pré-venda.";
+    outgoing.push({
+      kind: "text",
+      text:
+        `⚠️ Encontrei a venda, mas *não confirmou o lançamento*.\n` +
+        `${detail}\n\n` +
+        afterVendaMessage(),
+    });
+    return outgoing;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log("error", `PAP CRM lançamento falhou: ${message}`);
+    setVendorPhase(jid, "awaiting_venda", {
+      busy: false,
+      venda: {
+        step: "cpf",
+        papMatricula,
+        papSenha,
+      },
+    });
+    outgoing.push({
+      kind: "text",
+      text:
+        `❌ Não consegui lançar a venda agora.\n` +
+        `${message}\n\n` +
+        afterVendaMessage(),
+    });
+    return outgoing;
+  } finally {
+    getVendorSession(jid).busy = false;
+  }
+}
+
+async function handleVendaMessage(jid: string, raw: string): Promise<VendorOutgoing[]> {
+  const session = getVendorSession(jid);
+  const venda = session.venda || emptyVendaState();
+
+  if (wantsMenu(raw)) {
+    setVendorPhase(jid, "menu", { venda: null });
+    return texts(menuMessage(session.crmUser));
+  }
+  if (/^(encerrar|sair|logout|deslogar)$/i.test(raw.trim()) || /^9\b/.test(raw.trim())) {
+    return runOption(jid, "encerrar");
+  }
+
+  const option = optionFromText(raw);
+  if (option && option !== "venda") {
+    setVendorPhase(jid, "menu", { venda: null });
+    return runOption(jid, option);
+  }
+
+  if (venda.step === "pap_user") {
+    const matricula = raw.replace(/^(?:matricula|login|user)\s*[:=]\s*/i, "").trim().split(/\s+/)[0];
+    if (!matricula || matricula.length < 2 || isNonUsernameNoise(matricula)) {
+      return texts(askPapMatriculaMessage());
+    }
+    setVendorPhase(jid, "awaiting_venda", {
+      venda: emptyVendaState({ step: "pap_pass", papMatricula: matricula }),
+    });
+    return texts(askPapSenhaMessage(matricula));
+  }
+
+  if (venda.step === "pap_pass") {
+    const senha = raw.replace(/^(?:senha|password|pass)\s*[:=]\s*/i, "").trim();
+    if (!senha || isNonUsernameNoise(senha)) {
+      return texts(askPapSenhaMessage(venda.papMatricula || ""));
+    }
+    setVendorPhase(jid, "awaiting_venda", {
+      venda: emptyVendaState({
+        step: "cpf",
+        papMatricula: venda.papMatricula,
+        papSenha: senha,
+      }),
+    });
+    return texts(askCpfVendaMessage());
+  }
+
+  const doc = parseDocumentInput(raw);
+  if (!doc) {
+    return texts(askCpfVendaMessage());
+  }
+  return runVendaLaunch(jid, doc);
 }
 
 function startCoberturaFlow(jid: string): VendorOutgoing[] {
@@ -445,7 +679,7 @@ async function handleCoberturaMessage(jid: string, raw: string): Promise<VendorO
     setVendorPhase(jid, "menu", { cobertura: null });
     return texts(menuMessage(session.crmUser));
   }
-  if (/^(encerrar|sair|logout|deslogar)$/i.test(raw.trim()) || /^8\b/.test(raw.trim())) {
+  if (/^(encerrar|sair|logout|deslogar)$/i.test(raw.trim()) || /^9\b/.test(raw.trim())) {
     return runOption(jid, "encerrar");
   }
 
@@ -531,7 +765,7 @@ async function runOption(jid: string, kind: VendorQueryKind | "encerrar"): Promi
   }
 
   if (kind === "faturas") {
-    setVendorPhase(jid, "awaiting_cpf", { cobertura: null });
+    setVendorPhase(jid, "awaiting_cpf", { cobertura: null, venda: null });
     return texts(askCpfFaturaMessage());
   }
 
@@ -539,12 +773,16 @@ async function runOption(jid: string, kind: VendorQueryKind | "encerrar"): Promi
     return startCoberturaFlow(jid);
   }
 
+  if (kind === "venda") {
+    return startVendaFlow(jid);
+  }
+
   const session = getVendorSession(jid);
   session.busy = true;
   try {
     const page = await getVendorPage(jid);
     const result = await runVendorCrmQuery(page, kind);
-    setVendorPhase(jid, "menu", { busy: false, cobertura: null });
+    setVendorPhase(jid, "menu", { busy: false, cobertura: null, venda: null });
     return formatQueryResultMessages(result).map((text) => ({ kind: "text" as const, text }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -560,12 +798,16 @@ async function runOption(jid: string, kind: VendorQueryKind | "encerrar"): Promi
     setVendorPhase(jid, "menu", { busy: false });
     return texts(
       `❌ Deu erro ao buscar no CRM.\n` +
-        `Pode tentar novamente? Digite a opção (*1–7*) ou *8* para encerrar.`,
+        `Pode tentar novamente? Digite a opção (*1–8*) ou *9* para encerrar.`,
     );
   } finally {
     const current = getVendorSession(jid);
     if (current.crmUser && current.page) {
-      if (current.phase !== "awaiting_cpf" && current.phase !== "awaiting_cobertura") {
+      if (
+        current.phase !== "awaiting_cpf" &&
+        current.phase !== "awaiting_cobertura" &&
+        current.phase !== "awaiting_venda"
+      ) {
         current.phase = "menu";
       }
       current.busy = false;
@@ -591,6 +833,10 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
     return handleCoberturaMessage(jid, raw);
   }
 
+  if (session.phase === "awaiting_venda" && session.crmUser) {
+    return handleVendaMessage(jid, raw);
+  }
+
   // Aguardando CPF da fatura (mantém CRM logado)
   if (session.phase === "awaiting_cpf" && session.crmUser) {
     const option = optionFromText(raw);
@@ -600,7 +846,7 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
     return texts(askCpfFaturaMessage());
   }
 
-  // Logado no CRM: menu / atalho CPF. Opções 6/7 não precisam do Playwright do CRM.
+  // Logado no CRM: menu / atalho CPF. Opções 6/7/8 não precisam do Playwright do CRM.
   if ((session.phase === "menu" || session.phase === "awaiting_cpf") && session.crmUser) {
     const option = optionFromText(raw);
     if (!option) {
@@ -611,13 +857,18 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
       }
       return texts(menuMessage(session.crmUser));
     }
-    if (option === "faturas" || option === "cobertura" || option === "encerrar") {
+    if (
+      option === "faturas" ||
+      option === "cobertura" ||
+      option === "venda" ||
+      option === "encerrar"
+    ) {
       return runOption(jid, option);
     }
     if (!session.page) {
       return texts(
         `⚠️ A aba do CRM caiu. Envie o *usuário* de novo para reabrir,\n` +
-          `ou digite *6* (fatura) / *7* (cobertura) sem o CRM.`,
+          `ou digite *6* (fatura) / *7* (cobertura) / *8* (venda) sem o CRM.`,
       );
     }
     return runOption(jid, option);
@@ -668,9 +919,11 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
 export function resetVendorToAskLogin(jid: string) {
   setVendorPhase(jid, "awaiting_user", {
     crmUser: null,
+    crmPass: null,
     pendingUser: null,
     busy: false,
     cobertura: null,
+    venda: null,
   });
   return askUserOnlyMessage();
 }

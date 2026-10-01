@@ -173,7 +173,8 @@ test("menu CRM ONE com emojis e rodapé de consulta", () => {
   assert.match(menu, /Menu CRM ONE \(NIO\)/);
   assert.match(menu, /1️⃣/);
   assert.match(menu, /7️⃣ Cobertura/);
-  assert.match(menu, /8️⃣/);
+  assert.match(menu, /8️⃣ Colocar a venda no CRM/);
+  assert.match(menu, /9️⃣ Encerrar/);
   assert.match(menu, /Consulta realizada em 19\/09\/2026 às 15:36/);
   assert.match(menuMessage("Elisangela"), /Menu CRM ONE/);
 });

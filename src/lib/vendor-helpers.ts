@@ -24,7 +24,8 @@ export type VendorQueryKind =
   | "cancelados"
   | "biometria"
   | "faturas"
-  | "cobertura";
+  | "cobertura"
+  | "venda";
 
 export type VendorCrmRow = {
   name: string;
@@ -256,7 +257,8 @@ export function menuMessage(crmUser?: string | null, queriedAt = formatQueryTime
     `5️⃣ Ag. biometria\n` +
     `6️⃣ Faturas clientes\n` +
     `7️⃣ Cobertura Nio Fibra\n` +
-    `8️⃣ Encerrar e deslogar\n\n` +
+    `8️⃣ Colocar a venda no CRM\n` +
+    `9️⃣ Encerrar e deslogar\n\n` +
     consultationFooter(queriedAt)
   );
 }
@@ -270,7 +272,7 @@ export function askCpfFaturaMessage() {
     `📄 *Faturas de clientes*\n\n` +
     `Envie o *CPF* (ou CNPJ) do cliente em qualquer formato.\n` +
     `Exemplos: \`591.028.530-00\` ou \`59102853000\`\n\n` +
-    `_Digite *8* para encerrar ou *1–7* para outras opções._\n` +
+    `_Digite *9* para encerrar ou *1–8* para outras opções._\n` +
     `_build-fatura6-20260919_`
   );
 }
@@ -279,8 +281,43 @@ export function afterFaturaMessage() {
   return (
     `Precisa de mais alguma coisa?\n` +
     `• Envie *outro CPF* para nova fatura\n` +
-    `• Digite *1–7* para outras consultas\n` +
-    `• Digite *8* para encerrar`
+    `• Digite *1–8* para outras consultas\n` +
+    `• Digite *9* para encerrar`
+  );
+}
+
+export function askCpfVendaMessage() {
+  return (
+    `🛒 *Colocar a venda no CRM*\n\n` +
+    `Envie o *CPF* (ou CNPJ) do cliente para lançar a última venda do PAP na pré-venda NIO.\n` +
+    `Exemplos: \`591.028.530-00\` ou \`59102853000\`\n\n` +
+    `_O vendedor do CRM será *o seu login*._\n` +
+    `_Digite *menu* para voltar ou *9* para encerrar._`
+  );
+}
+
+export function askPapMatriculaMessage() {
+  return (
+    `🛒 *Colocar a venda no CRM*\n\n` +
+    `Para lançar no PAP, envie a *matrícula do PAP*.\n` +
+    `_Digite *menu* para voltar ou *9* para encerrar._`
+  );
+}
+
+export function askPapSenhaMessage(matricula: string) {
+  return (
+    `🛒 *Colocar a venda no CRM*\n\n` +
+    `Matrícula PAP: *${matricula}*\n\n` +
+    `Agora envie a *senha do PAP*.`
+  );
+}
+
+export function afterVendaMessage() {
+  return (
+    `Precisa de mais alguma coisa?\n` +
+    `• Envie *outro CPF* para lançar outra venda\n` +
+    `• Digite *1–8* para outras opções\n` +
+    `• Digite *9* para encerrar`
   );
 }
 
@@ -289,7 +326,7 @@ export function askCoberturaCepMessage() {
     `📡 *Cobertura Nio Fibra*\n\n` +
     `Envie o *CEP* do endereço (8 dígitos).\n` +
     `Exemplo: \`88888888\` ou \`88888-888\`\n\n` +
-    `_Digite *menu* para voltar ou *8* para encerrar._`
+    `_Digite *menu* para voltar ou *9* para encerrar._`
   );
 }
 
@@ -312,7 +349,7 @@ export function askCoberturaEnderecoMessage(
     `📡 *Escolha o endereço*\n\n` +
     `${lines.join("\n")}\n\n` +
     `Responda com a *letra* da opção (ex.: *A* ou *B*).\n` +
-    `_Não use 1–8 — isso é do menu._\n` +
+    `_Não use 1–9 — isso é do menu._\n` +
     `_Ou digite *menu* para voltar._`
   );
 }
@@ -331,7 +368,7 @@ export function askCoberturaComplementoMessage(
     `📡 ${title}\n\n` +
     `${lines.join("\n")}\n\n` +
     `Responda com a *letra* da opção (${example}).\n` +
-    `_Não use 1–8 — isso é do menu._\n` +
+    `_Não use 1–9 — isso é do menu._\n` +
     `_Ou digite *menu* para voltar._`
   );
 }
@@ -416,7 +453,7 @@ export function afterCoberturaMessage() {
     `Quer consultar *outra cobertura*?\n\n` +
     `*S* — Sim, consultar outro CEP\n` +
     `*N* — Não, voltar ao menu\n` +
-    `*8* — Encerrar sessão`
+    `*9* — Encerrar sessão`
   );
 }
 
@@ -565,7 +602,7 @@ export function formatQueryResultMessages(result: VendorQueryResult): string[] {
   const footer = consultationFooter(queriedAt);
   const askMore =
     `Precisa de mais alguma informação?\n` +
-    `Digite *1–7* para outra busca ou *8* para encerrar.`;
+    `Digite *1–8* para outra busca ou *9* para encerrar.`;
 
   if (result.kind === "faturas") {
     return [
@@ -621,10 +658,19 @@ export function optionFromText(text: string): VendorQueryKind | "encerrar" | nul
     .replace(/5️⃣/g, "5")
     .replace(/6️⃣/g, "6")
     .replace(/7️⃣/g, "7")
-    .replace(/8️⃣/g, "8");
+    .replace(/8️⃣/g, "8")
+    .replace(/9️⃣/g, "9");
   if (!cleaned) return null;
-  if (/^8\b/.test(cleaned) || /^(encerrar|sair|logout|deslogar)\b/.test(cleaned)) {
+  if (/^9\b/.test(cleaned) || /^(encerrar|sair|logout|deslogar)\b/.test(cleaned)) {
     return "encerrar";
+  }
+  if (
+    /^8\b/.test(cleaned) ||
+    /^(venda|vender)\b/.test(cleaned) ||
+    /colocar a venda/.test(cleaned) ||
+    /venda no crm/.test(cleaned)
+  ) {
+    return "venda";
   }
   if (/^1\b/.test(cleaned) || /^instalad/.test(cleaned)) return "instalados";
   if (/^2\b/.test(cleaned) || /^agendad/.test(cleaned)) return "agendados";

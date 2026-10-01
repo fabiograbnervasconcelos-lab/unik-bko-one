@@ -197,6 +197,9 @@ export async function runVendorCrmQuery(page: Page, kind: VendorQueryKind): Prom
   if (kind === "cobertura") {
     return withMeta(kind, "Cobertura Nio Fibra", [], null, "Envie o CEP do endereço.");
   }
+  if (kind === "venda") {
+    return withMeta(kind, "Colocar a venda no CRM", [], null, "Envie o CPF do cliente.");
+  }
   if (kind === "instalados") {
     return withMeta(kind, "Instalados", await collectBySearch(page, CRM_NIO_HISTORICO, "instalado", kind), label);
   }

@@ -103,7 +103,7 @@ export function WhatsAppCrmPanel() {
         <p className="max-w-2xl text-sm text-muted-foreground">
           App separado do painel CRM × GED. Conecte o WhatsApp do robô{" "}
           <strong>48 99645-0101</strong>. Cada vendedor que mandar mensagem recebe resposta no
-          próprio chat (login CRM, menu 1–7, faturas).
+          próprio chat (login CRM, menu 1–9, faturas, cobertura, venda).
         </p>
         <div className="flex flex-wrap gap-2 pt-1">
           <Badge variant={connected ? "default" : "secondary"}>
@@ -170,7 +170,7 @@ export function WhatsAppCrmPanel() {
         <h2 className="text-lg font-medium">2. Menu do vendedor</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           O vendedor manda qualquer mensagem → informa usuário/senha do CRM → menu NIO (1–5
-          consultas, 6 faturas, 7 encerrar).
+          consultas, 6 faturas, 7 cobertura, 8 venda no CRM, 9 encerrar).
         </p>
         {sessions.length ? (
           <ul className="mt-4 space-y-2 text-sm">

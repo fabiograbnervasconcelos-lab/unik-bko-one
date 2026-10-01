@@ -30,9 +30,17 @@ export async function GET() {
       features: {
         vendorBot,
         faturaOpcao6: true,
+        vendaOpcao8: true,
         faturaRoboUrl:
           process.env.FATURA_ROBO_URL ||
           "https://robo-one-telecom-production.up.railway.app",
+        nioPapCrmUrl:
+          process.env.NIO_PAP_CRM_URL ||
+          "https://nio-pap-crm-production.up.railway.app",
+        nioPapConfigured: Boolean(
+          (process.env.NIO_PAP_MATRICULA || process.env.PAP_MATRICULA) &&
+            (process.env.NIO_PAP_SENHA || process.env.PAP_SENHA),
+        ),
       },
     }),
   );

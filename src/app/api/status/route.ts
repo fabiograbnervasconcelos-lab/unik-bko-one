@@ -15,6 +15,7 @@ function deployMeta() {
   return {
     gitSha: sha.slice(0, 12),
     faturaOpcao6: true as const,
+    vendaOpcao8: true as const,
     timezone: "America/Sao_Paulo",
   };
 }

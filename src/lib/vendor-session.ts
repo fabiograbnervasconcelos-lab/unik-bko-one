@@ -11,14 +11,24 @@ export type VendorPhase =
   | "menu"
   | "awaiting_cpf"
   | "awaiting_cobertura"
+  | "awaiting_venda"
   | "busy";
+
+export type VendorVendaState = {
+  step: "pap_user" | "pap_pass" | "cpf";
+  papMatricula: string | null;
+  papSenha: string | null;
+};
 
 export type VendorSession = {
   jid: string;
   phase: VendorPhase;
   crmUser: string | null;
+  /** Senha do CRM da sessão (usada no lançamento PAP → CRM). Não logar. */
+  crmPass: string | null;
   pendingUser: string | null;
   cobertura: NioCoberturaState | null;
+  venda: VendorVendaState | null;
   browser: Browser | null;
   context: BrowserContext | null;
   page: Page | null;
@@ -48,8 +58,10 @@ function emptySession(jid: string): VendorSession {
     jid,
     phase: "need_login",
     crmUser: null,
+    crmPass: null,
     pendingUser: null,
     cobertura: null,
+    venda: null,
     browser: null,
     context: null,
     page: null,
@@ -78,7 +90,9 @@ export function getVendorSession(jid: string) {
 
 function mergeVendorSessionState(target: VendorSession, source: VendorSession) {
   if (!target.crmUser && source.crmUser) target.crmUser = source.crmUser;
+  if (!target.crmPass && source.crmPass) target.crmPass = source.crmPass;
   if (!target.pendingUser && source.pendingUser) target.pendingUser = source.pendingUser;
+  if (!target.venda && source.venda) target.venda = source.venda;
   if (!target.page && source.page) {
     target.page = source.page;
     target.context = source.context;
@@ -92,6 +106,7 @@ function mergeVendorSessionState(target: VendorSession, source: VendorSession) {
     busy: 3,
     awaiting_cpf: 4,
     awaiting_cobertura: 4,
+    awaiting_venda: 4,
     menu: 5,
   };
   if ((rank[source.phase] ?? 0) > (rank[target.phase] ?? 0)) {
@@ -195,7 +210,9 @@ export async function openVendorCrm(jid: string, user: string, pass: string) {
   next.context = context;
   next.page = page;
   next.crmUser = user;
+  next.crmPass = pass;
   next.pendingUser = null;
+  next.venda = null;
   next.phase = "menu";
   next.busy = false;
   next.lastActiveAt = Date.now();
@@ -209,7 +226,13 @@ export async function getVendorPage(jid: string) {
   if (!session.page || !session.crmUser) {
     throw new Error("VENDOR_NOT_LOGGED");
   }
-  if (session.phase !== "menu" && session.phase !== "busy" && session.phase !== "awaiting_cpf") {
+  if (
+    session.phase !== "menu" &&
+    session.phase !== "busy" &&
+    session.phase !== "awaiting_cpf" &&
+    session.phase !== "awaiting_venda" &&
+    session.phase !== "awaiting_cobertura"
+  ) {
     throw new Error("VENDOR_NOT_LOGGED");
   }
   try {

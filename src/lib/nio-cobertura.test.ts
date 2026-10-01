@@ -23,17 +23,20 @@ import {
   wantsAnotherCobertura,
 } from "./vendor-helpers.ts";
 
-test("menu tem cobertura na 7 e encerrar na 8", () => {
+test("menu tem cobertura na 7, venda na 8 e encerrar na 9", () => {
   const menu = menuMessage("Elisangela");
   assert.match(menu, /7️⃣ Cobertura/);
-  assert.match(menu, /8️⃣ Encerrar/);
-  assert.doesNotMatch(menu, /7️⃣ Encerrar/);
+  assert.match(menu, /8️⃣ Colocar a venda no CRM/);
+  assert.match(menu, /9️⃣ Encerrar/);
+  assert.doesNotMatch(menu, /8️⃣ Encerrar/);
 });
 
-test("optionFromText mapeia 7=cobertura e 8=encerrar", () => {
+test("optionFromText mapeia 7=cobertura, 8=venda e 9=encerrar", () => {
   assert.equal(optionFromText("7"), "cobertura");
   assert.equal(optionFromText("cobertura"), "cobertura");
-  assert.equal(optionFromText("8"), "encerrar");
+  assert.equal(optionFromText("8"), "venda");
+  assert.equal(optionFromText("venda"), "venda");
+  assert.equal(optionFromText("9"), "encerrar");
   assert.equal(optionFromText("encerrar"), "encerrar");
 });
 
