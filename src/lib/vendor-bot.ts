@@ -16,6 +16,7 @@ import {
   listNioPapSellers,
   matchSellerByCrmUser,
   papCredentialsFromEnv,
+  papCrmOperatorFromEnv,
   papDiasDefault,
   syncNioPapVenda,
   vendaFoiLancada,
@@ -183,59 +184,120 @@ function emptyVendaState(patch: Partial<VendorVendaState> = {}): VendorVendaStat
     step: "cpf",
     papMatricula: null,
     papSenha: null,
+    vendedorId: null,
+    vendedorNome: null,
     ...patch,
   };
 }
 
-function startVendaFlow(jid: string): VendorOutgoing[] {
-  const envPap = papCredentialsFromEnv();
-  if (envPap) {
-    setVendorPhase(jid, "awaiting_venda", {
-      cobertura: null,
-      venda: emptyVendaState({
-        step: "cpf",
-        papMatricula: envPap.matricula,
-        papSenha: envPap.senha,
-      }),
-    });
-    return texts(askCpfVendaMessage());
-  }
-
+/**
+ * Opção 8: primeiro "Carregar vendedores do CRM" (como no nio-pap-crm),
+ * casa o login do WhatsApp com o vendedor, só então pede o CPF.
+ */
+async function startVendaFlow(jid: string): Promise<VendorOutgoing[]> {
   const session = getVendorSession(jid);
-  if (session.venda?.papMatricula && session.venda?.papSenha) {
+  const envPap = papCredentialsFromEnv();
+  const operator = papCrmOperatorFromEnv();
+  const papMatricula =
+    envPap?.matricula || session.venda?.papMatricula || null;
+  const papSenha = envPap?.senha || session.venda?.papSenha || null;
+
+  if (!papMatricula || !papSenha) {
     setVendorPhase(jid, "awaiting_venda", {
       cobertura: null,
-      venda: emptyVendaState({
-        step: "cpf",
-        papMatricula: session.venda.papMatricula,
-        papSenha: session.venda.papSenha,
-      }),
+      venda: emptyVendaState({ step: "pap_user" }),
     });
-    return texts(askCpfVendaMessage());
+    return texts(askPapMatriculaMessage());
   }
 
+  if (!operator) {
+    return texts(
+      `❌ Falta o login do CRM operador no servidor (NIO_PAP_CRM_USUARIO / NIO_PAP_CRM_SENHA).\n` +
+        `É o mesmo usuário do botão *Carregar vendedores do CRM* no PAP.`,
+    );
+  }
+
+  if (!session.crmUser) {
+    setVendorPhase(jid, "need_login", { venda: null });
+    return texts(
+      `⚠️ Preciso do *usuário* do CRM (nome do vendedor) para lançar a venda.\n` +
+        `Envie o usuário do CRM para entrar.`,
+    );
+  }
+
+  session.busy = true;
   setVendorPhase(jid, "awaiting_venda", {
     cobertura: null,
-    venda: emptyVendaState({ step: "pap_user" }),
+    venda: emptyVendaState({
+      step: "loading_sellers",
+      papMatricula,
+      papSenha,
+    }),
   });
-  return texts(askPapMatriculaMessage());
+  const outgoing = texts(
+    `⏳ Carregando vendedores do CRM (PAP)…\n` +
+      `_Mesmo passo do botão "Carregar vendedores do CRM"._`,
+  );
+
+  try {
+    const sellers = await listNioPapSellers({
+      crmUsuario: operator.usuario,
+      crmSenha: operator.senha,
+    });
+    const seller = matchSellerByCrmUser(sellers, session.crmUser);
+    if (!seller) {
+      setVendorPhase(jid, "menu", { busy: false, venda: null });
+      outgoing.push({
+        kind: "text",
+        text:
+          `❌ Vendedores carregados, mas não achei *${session.crmUser}* na lista do CRM.\n` +
+          `O login do WhatsApp precisa ser o *mesmo nome* do vendedor na pré-venda.\n\n` +
+          menuMessage(session.crmUser),
+      });
+      return outgoing;
+    }
+
+    setVendorPhase(jid, "awaiting_venda", {
+      busy: false,
+      venda: emptyVendaState({
+        step: "cpf",
+        papMatricula,
+        papSenha,
+        vendedorId: seller.id,
+        vendedorNome: seller.name,
+      }),
+    });
+    outgoing.push({
+      kind: "text",
+      text: askCpfVendaMessage(seller.name),
+    });
+    return outgoing;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log("error", `PAP CRM carregar vendedores falhou: ${message}`);
+    setVendorPhase(jid, "menu", { busy: false, venda: null });
+    outgoing.push({
+      kind: "text",
+      text:
+        `❌ Não consegui carregar os vendedores do CRM.\n` +
+        `${message}\n\n` +
+        menuMessage(session.crmUser),
+    });
+    return outgoing;
+  } finally {
+    getVendorSession(jid).busy = false;
+  }
 }
 
 async function runVendaLaunch(jid: string, docDigits: string): Promise<VendorOutgoing[]> {
   const session = getVendorSession(jid);
-  const crmUser = session.crmUser;
-  const crmPass = session.crmPass;
   const venda = session.venda || emptyVendaState();
   const papMatricula = venda.papMatricula || papCredentialsFromEnv()?.matricula || null;
   const papSenha = venda.papSenha || papCredentialsFromEnv()?.senha || null;
+  const operator = papCrmOperatorFromEnv();
+  let vendedorId = venda.vendedorId;
+  let vendedorNome = venda.vendedorNome;
 
-  if (!crmUser || !crmPass) {
-    setVendorPhase(jid, "need_login", { busy: false, venda: null });
-    return texts(
-      `⚠️ Preciso da senha do CRM para lançar a venda.\n` +
-        `Envie o *usuário* do CRM para entrar de novo.`,
-    );
-  }
   if (!papMatricula || !papSenha) {
     setVendorPhase(jid, "awaiting_venda", {
       busy: false,
@@ -243,51 +305,64 @@ async function runVendaLaunch(jid: string, docDigits: string): Promise<VendorOut
     });
     return texts(askPapMatriculaMessage());
   }
+  if (!operator) {
+    return texts(
+      `❌ Falta o login do CRM operador no servidor (NIO_PAP_CRM_USUARIO / NIO_PAP_CRM_SENHA).`,
+    );
+  }
 
   session.busy = true;
+
+  // Se ainda não carregou vendedores (ex.: sessão antiga), carrega agora
+  if (!vendedorId && session.crmUser) {
+    try {
+      const sellers = await listNioPapSellers({
+        crmUsuario: operator.usuario,
+        crmSenha: operator.senha,
+      });
+      const seller = matchSellerByCrmUser(sellers, session.crmUser);
+      if (seller) {
+        vendedorId = seller.id;
+        vendedorNome = seller.name;
+      }
+    } catch {
+      // tratado abaixo
+    }
+  }
+
+  if (!vendedorId) {
+    session.busy = false;
+    return startVendaFlow(jid);
+  }
+
   const dias = papDiasDefault();
   const outgoing: VendorOutgoing[] = texts(
     `⏳ Lançando a venda no PAP → CRM…\n` +
       `Documento: *${docDigits}*\n` +
-      `Vendedor: *${crmUser}*\n` +
+      `Vendedor: *${vendedorNome || session.crmUser}*\n` +
       `_Última venda dos últimos ${dias} dias._`,
   );
 
   try {
-    const sellers = await listNioPapSellers({ crmUsuario: crmUser, crmSenha: crmPass });
-    const seller = matchSellerByCrmUser(sellers, crmUser);
-    if (!seller) {
-      setVendorPhase(jid, "awaiting_venda", {
-        busy: false,
-        venda: { ...venda, step: "cpf" },
-      });
-      outgoing.push({
-        kind: "text",
-        text:
-          `❌ Não achei o vendedor *${crmUser}* na lista do CRM/PAP.\n` +
-          `Confira se o login é o mesmo nome do vendedor na pré-venda.\n\n` +
-          afterVendaMessage(),
-      });
-      return outgoing;
-    }
-
     const result = await syncNioPapVenda({
       documento: docDigits,
       dias,
-      vendedorId: seller.id,
+      vendedorId,
       papMatricula,
       papSenha,
-      crmUsuario: crmUser,
-      crmSenha: crmPass,
+      crmUsuario: operator.usuario,
+      crmSenha: operator.senha,
     });
 
     setVendorPhase(jid, "awaiting_venda", {
       busy: false,
-      venda: {
+      venda: emptyVendaState({
         step: "cpf",
         papMatricula,
         papSenha,
-      },
+        vendedorId,
+        vendedorNome,
+      }),
     });
 
     if (!result.encontrados || !result.escolhida) {
@@ -327,11 +402,13 @@ async function runVendaLaunch(jid: string, docDigits: string): Promise<VendorOut
     log("error", `PAP CRM lançamento falhou: ${message}`);
     setVendorPhase(jid, "awaiting_venda", {
       busy: false,
-      venda: {
+      venda: emptyVendaState({
         step: "cpf",
         papMatricula,
         papSenha,
-      },
+        vendedorId,
+        vendedorNome,
+      }),
     });
     outgoing.push({
       kind: "text",
@@ -382,17 +459,22 @@ async function handleVendaMessage(jid: string, raw: string): Promise<VendorOutgo
     }
     setVendorPhase(jid, "awaiting_venda", {
       venda: emptyVendaState({
-        step: "cpf",
+        step: "loading_sellers",
         papMatricula: venda.papMatricula,
         papSenha: senha,
       }),
     });
-    return texts(askCpfVendaMessage());
+    // Grava PAP na sessão e segue para carregar vendedores + pedir CPF
+    return startVendaFlow(jid);
+  }
+
+  if (venda.step === "loading_sellers") {
+    return texts("⏳ Ainda estou carregando os vendedores do CRM…");
   }
 
   const doc = parseDocumentInput(raw);
   if (!doc) {
-    return texts(askCpfVendaMessage());
+    return texts(askCpfVendaMessage(venda.vendedorNome));
   }
   return runVendaLaunch(jid, doc);
 }

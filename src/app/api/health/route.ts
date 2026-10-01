@@ -27,7 +27,7 @@ export async function GET() {
       ok: true,
       ts: Date.now(),
       gitSha: sha.slice(0, 12),
-      buildId: "venda-opcao8-20261001",
+      buildId: "venda-opcao8-sellers-20261001",
       features: {
         vendorBot,
         faturaOpcao6: true,
@@ -41,6 +41,10 @@ export async function GET() {
         nioPapConfigured: Boolean(
           (process.env.NIO_PAP_MATRICULA || process.env.PAP_MATRICULA) &&
             (process.env.NIO_PAP_SENHA || process.env.PAP_SENHA),
+        ),
+        nioPapCrmOperatorConfigured: Boolean(
+          (process.env.NIO_PAP_CRM_USUARIO || process.env.CRM_USUARIO) &&
+            (process.env.NIO_PAP_CRM_SENHA || process.env.CRM_SENHA),
         ),
       },
     }),
