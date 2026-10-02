@@ -16,7 +16,7 @@ export type NioPapEscolhida = {
   pagamento?: string | null;
   valor?: string | null;
   plano?: string | null;
-  crmCodigo?: string | null;
+  crmCodigo?: string | number | null;
   crmUrl?: string | null;
   skipped?: string | null;
   error?: string | null;
@@ -147,20 +147,64 @@ export async function syncNioPapVenda(params: {
   return data;
 }
 
-/** True quando o PAP/CRM confirma pré-venda criada. */
+/** Extrai código da pré-venda de campos soltos ou do resumo WhatsApp. */
+export function extractPrevendaCodigo(result: NioPapSyncResult): string | null {
+  const rows = [
+    ...(result.resultados ?? []),
+    ...(result.escolhida ? [result.escolhida] : []),
+  ];
+  for (const row of rows) {
+    if (row?.crmCodigo != null && String(row.crmCodigo).trim()) {
+      return String(row.crmCodigo).trim();
+    }
+    const fromUrl = String(row?.crmUrl || "").match(/prevenda=(\d+)/i);
+    if (fromUrl?.[1]) return fromUrl[1];
+    const fromSkipped = String(row?.skipped || "").match(
+      /pr[eé]-?\s*venda\s*[:#]?\s*(\d+)/i,
+    );
+    if (fromSkipped?.[1]) return fromSkipped[1];
+  }
+  const resumo = result.resumoWhatsapp || "";
+  const fromResumo =
+    resumo.match(/Pr[eé]-?\s*venda\s*[:#]?\s*(\d+)/i) ||
+    resumo.match(/prevenda=(\d+)/i);
+  return fromResumo?.[1] ?? null;
+}
+
+/**
+ * True quando o PAP/CRM confirma pré-venda (nova ou já existente).
+ * Aceita crmCodigo, URL, skipped com número, ou resumo WhatsApp com Pré-venda.
+ */
 export function vendaFoiLancada(result: NioPapSyncResult): boolean {
-  const rows = result.resultados?.length ? result.resultados : result.escolhida ? [result.escolhida] : [];
-  return rows.some((row) => Boolean(row?.crmCodigo) && !row?.skipped && !row?.error);
+  if (extractPrevendaCodigo(result)) return true;
+  const resumo = (result.resumoWhatsapp || "").trim();
+  if (/pr[eé]-?\s*venda/i.test(resumo) && /cliente\s*:/i.test(resumo)) {
+    return true;
+  }
+  const rows = result.resultados?.length
+    ? result.resultados
+    : result.escolhida
+      ? [result.escolhida]
+      : [];
+  // Lançou sem código explícito, mas sem erro fatal
+  return rows.some(
+    (row) =>
+      Boolean(row?.crmUrl) &&
+      !row?.error &&
+      !/n[aã]o\s+lan[cç]ad/i.test(String(row?.skipped || "")),
+  );
 }
 
 export function formatVendaLancadaMessage(result: NioPapSyncResult): string {
   const escolhida = result.escolhida;
   const launched =
-    result.resultados?.find((row) => row?.crmCodigo) ||
-    (escolhida?.crmCodigo ? escolhida : null);
+    result.resultados?.find((row) => row?.crmCodigo != null || row?.crmUrl) ||
+    escolhida ||
+    null;
+  const codigo = extractPrevendaCodigo(result);
 
   const lines = [`✅ *Lançado*`];
-  if (launched?.crmCodigo) lines.push(`Pré-venda: *${launched.crmCodigo}*`);
+  if (codigo) lines.push(`Pré-venda: *${codigo}*`);
   if (escolhida?.nome || launched?.nome) {
     lines.push(`Cliente: *${escolhida?.nome || launched?.nome}*`);
   }
@@ -171,6 +215,8 @@ export function formatVendaLancadaMessage(result: NioPapSyncResult): string {
   if (escolhida?.data) lines.push(`Data da venda: *${escolhida.data}*`);
   if (result.resumoWhatsapp?.trim()) {
     lines.push("", result.resumoWhatsapp.trim());
+  } else if (launched?.crmUrl) {
+    lines.push("", launched.crmUrl);
   }
   return lines.join("\n");
 }

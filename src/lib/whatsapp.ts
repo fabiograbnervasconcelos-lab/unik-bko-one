@@ -260,7 +260,10 @@ async function handleIncomingCommand(message: WAMessage) {
   );
   try {
     const { handleVendorMessage } = await import("@/lib/vendor-bot");
-    const replies = await handleVendorMessage(sessionJid, text);
+    const replies = await handleVendorMessage(sessionJid, text, async (partial) => {
+      // Avisos intermediários (ex.: "⏳ Lançando…") antes do fim do sync PAP
+      await replyText(replyJid, partial);
+    });
     for (const reply of replies) {
       if (reply.kind === "text") {
         await replyText(replyJid, reply.text);

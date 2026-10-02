@@ -210,7 +210,8 @@ export function uniqueRows(rows: VendorCrmRow[]) {
 export function filterRows(kind: VendorQueryKind, rows: VendorCrmRow[], now = new Date()) {
   return uniqueRows(rows).filter((row) => {
     if (!matchesWantedStatus(kind, row.status)) return false;
-    if (kind === "quebra" || kind === "biometria") return true;
+    // Só Instalados (1) fica no mês vigente. 2–5 trazem todos os status, qualquer data.
+    if (kind !== "instalados") return true;
     const dateForMonth = row.agendaDate || row.date;
     if (!dateForMonth) return true;
     return dateInCurrentMonth(dateForMonth, now);
@@ -251,10 +252,10 @@ export function menuMessage(crmUser?: string | null, queriedAt = formatQueryTime
   return (
     `*Menu CRM ONE (NIO)*${who}\n\n` +
     `1️⃣ Instalados — nome + OS _(mês vigente)_\n` +
-    `2️⃣ Agendados _(mês vigente)_\n` +
-    `3️⃣ Tratar quebra / Quebra em tratamento\n` +
-    `4️⃣ Cancelados do mês\n` +
-    `5️⃣ Ag. biometria\n` +
+    `2️⃣ Agendados _(todos)_\n` +
+    `3️⃣ Tratar quebra / Quebra em tratamento _(todos)_\n` +
+    `4️⃣ Cancelados _(todos)_\n` +
+    `5️⃣ Ag. biometria _(todos)_\n` +
     `6️⃣ Faturas clientes\n` +
     `7️⃣ Cobertura Nio Fibra\n` +
     `8️⃣ Colocar a venda no CRM\n` +
