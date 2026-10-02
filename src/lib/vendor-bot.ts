@@ -72,6 +72,9 @@ export type VendorOutgoing =
   | { kind: "text"; text: string }
   | { kind: "pdf"; data: Buffer; fileName: string; caption?: string };
 
+/** Envia aviso imediato (ex.: "⏳ Lançando…") antes do fim do handler. */
+export type VendorNotify = (text: string) => Promise<void>;
+
 function texts(...values: string[]): VendorOutgoing[] {
   return values.filter(Boolean).map((text) => ({ kind: "text" as const, text }));
 }
@@ -194,7 +197,7 @@ function emptyVendaState(patch: Partial<VendorVendaState> = {}): VendorVendaStat
  * Opção 8: primeiro "Carregar vendedores do CRM" (como no nio-pap-crm),
  * casa o login do WhatsApp com o vendedor, só então pede o CPF.
  */
-async function startVendaFlow(jid: string): Promise<VendorOutgoing[]> {
+async function startVendaFlow(jid: string, _notify?: VendorNotify): Promise<VendorOutgoing[]> {
   const session = getVendorSession(jid);
   const envPap = papCredentialsFromEnv();
   const operator = papCrmOperatorFromEnv();
@@ -289,7 +292,11 @@ async function startVendaFlow(jid: string): Promise<VendorOutgoing[]> {
   }
 }
 
-async function runVendaLaunch(jid: string, docDigits: string): Promise<VendorOutgoing[]> {
+async function runVendaLaunch(
+  jid: string,
+  docDigits: string,
+  notify?: VendorNotify,
+): Promise<VendorOutgoing[]> {
   const session = getVendorSession(jid);
   const venda = session.venda || emptyVendaState();
   const papMatricula = venda.papMatricula || papCredentialsFromEnv()?.matricula || null;
@@ -332,16 +339,21 @@ async function runVendaLaunch(jid: string, docDigits: string): Promise<VendorOut
 
   if (!vendedorId) {
     session.busy = false;
-    return startVendaFlow(jid);
+    return startVendaFlow(jid, notify);
   }
 
   const dias = papDiasDefault();
-  const outgoing: VendorOutgoing[] = texts(
+  const waiting =
     `⏳ Lançando a venda no PAP → CRM…\n` +
-      `Documento: *${docDigits}*\n` +
-      `Vendedor: *${vendedorNome || session.crmUser}*\n` +
-      `_Última venda dos últimos ${dias} dias._`,
-  );
+    `Documento: *${docDigits}*\n` +
+    `Vendedor: *${vendedorNome || session.crmUser}*\n` +
+    `_Última venda dos últimos ${dias} dias._\n` +
+    `_Aviso ✅ Lançado chega quando o sistema confirmar._`;
+
+  // Manda o "aguarde" na hora — o sync do PAP pode levar alguns minutos
+  if (notify) {
+    await notify(waiting).catch(() => undefined);
+  }
 
   try {
     const result = await syncNioPapVenda({
@@ -365,38 +377,42 @@ async function runVendaLaunch(jid: string, docDigits: string): Promise<VendorOut
       }),
     });
 
+    const first = result.resultados?.[0] || result.escolhida;
+    log(
+      "info",
+      `PAP sync doc=${docDigits.slice(0, 3)}*** encontrados=${result.encontrados ?? "?"} ` +
+        `crmCodigo=${first?.crmCodigo ?? "-"} skipped=${first?.skipped ?? "-"} ` +
+        `resumo=${result.resumoWhatsapp ? "sim" : "não"} lancada=${vendaFoiLancada(result)}`,
+    );
+
     if (!result.encontrados || !result.escolhida) {
-      outgoing.push({
-        kind: "text",
-        text:
-          `❌ Nenhuma venda de *${result.documento || docDigits}* nos últimos *${result.dias || dias}* dias no PAP.\n\n` +
+      return texts(
+        `❌ Nenhuma venda de *${result.documento || docDigits}* nos últimos *${result.dias || dias}* dias no PAP.\n\n` +
           afterVendaMessage(),
-      });
-      return outgoing;
+      );
     }
 
     if (vendaFoiLancada(result)) {
-      outgoing.push({
-        kind: "text",
-        text: `${formatVendaLancadaMessage(result)}\n\n${afterVendaMessage()}`,
-      });
-      return outgoing;
+      return texts(`${formatVendaLancadaMessage(result)}\n\n${afterVendaMessage()}`);
     }
 
-    const first = result.resultados?.[0] || result.escolhida;
+    // Fallback: se o resumo já veio montado, manda como Lançado mesmo sem crmCodigo tipado
+    if (result.resumoWhatsapp?.trim() && /pr[eé]-?\s*venda/i.test(result.resumoWhatsapp)) {
+      return texts(
+        `✅ *Lançado*\n\n${result.resumoWhatsapp.trim()}\n\n${afterVendaMessage()}`,
+      );
+    }
+
     const detail =
       first?.error ||
       first?.skipped ||
       result.resumoWhatsapp ||
       "O sistema não confirmou o lançamento da pré-venda.";
-    outgoing.push({
-      kind: "text",
-      text:
-        `⚠️ Encontrei a venda, mas *não confirmou o lançamento*.\n` +
+    return texts(
+      `⚠️ Encontrei a venda, mas *não confirmou o lançamento*.\n` +
         `${detail}\n\n` +
         afterVendaMessage(),
-    });
-    return outgoing;
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log("error", `PAP CRM lançamento falhou: ${message}`);
@@ -410,20 +426,21 @@ async function runVendaLaunch(jid: string, docDigits: string): Promise<VendorOut
         vendedorNome,
       }),
     });
-    outgoing.push({
-      kind: "text",
-      text:
-        `❌ Não consegui lançar a venda agora.\n` +
+    return texts(
+      `❌ Não consegui lançar a venda agora.\n` +
         `${message}\n\n` +
         afterVendaMessage(),
-    });
-    return outgoing;
+    );
   } finally {
     getVendorSession(jid).busy = false;
   }
 }
 
-async function handleVendaMessage(jid: string, raw: string): Promise<VendorOutgoing[]> {
+async function handleVendaMessage(
+  jid: string,
+  raw: string,
+  notify?: VendorNotify,
+): Promise<VendorOutgoing[]> {
   const session = getVendorSession(jid);
   const venda = session.venda || emptyVendaState();
 
@@ -465,7 +482,7 @@ async function handleVendaMessage(jid: string, raw: string): Promise<VendorOutgo
       }),
     });
     // Grava PAP na sessão e segue para carregar vendedores + pedir CPF
-    return startVendaFlow(jid);
+    return startVendaFlow(jid, notify);
   }
 
   if (venda.step === "loading_sellers") {
@@ -476,7 +493,7 @@ async function handleVendaMessage(jid: string, raw: string): Promise<VendorOutgo
   if (!doc) {
     return texts(askCpfVendaMessage(venda.vendedorNome));
   }
-  return runVendaLaunch(jid, doc);
+  return runVendaLaunch(jid, doc, notify);
 }
 
 function startCoberturaFlow(jid: string): VendorOutgoing[] {
@@ -837,7 +854,11 @@ async function handleCoberturaMessage(jid: string, raw: string): Promise<VendorO
   return startCoberturaFlow(jid);
 }
 
-async function runOption(jid: string, kind: VendorQueryKind | "encerrar"): Promise<VendorOutgoing[]> {
+async function runOption(
+  jid: string,
+  kind: VendorQueryKind | "encerrar",
+  notify?: VendorNotify,
+): Promise<VendorOutgoing[]> {
   if (kind === "encerrar") {
     await destroyVendorSession(jid, { logout: true });
     return texts(
@@ -856,7 +877,7 @@ async function runOption(jid: string, kind: VendorQueryKind | "encerrar"): Promi
   }
 
   if (kind === "venda") {
-    return startVendaFlow(jid);
+    return startVendaFlow(jid, notify);
   }
 
   const session = getVendorSession(jid);
@@ -901,8 +922,13 @@ async function runOption(jid: string, kind: VendorQueryKind | "encerrar"): Promi
 
 /**
  * Fluxo conversacional do vendedor no WhatsApp.
+ * `notify` envia textos na hora (antes do fim do sync PAP, etc.).
  */
-export async function handleVendorMessage(jid: string, text: string): Promise<VendorOutgoing[]> {
+export async function handleVendorMessage(
+  jid: string,
+  text: string,
+  notify?: VendorNotify,
+): Promise<VendorOutgoing[]> {
   const raw = text.trim();
   if (!raw) return [];
 
@@ -916,13 +942,13 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
   }
 
   if (session.phase === "awaiting_venda" && session.crmUser) {
-    return handleVendaMessage(jid, raw);
+    return handleVendaMessage(jid, raw, notify);
   }
 
   // Aguardando CPF da fatura (mantém CRM logado)
   if (session.phase === "awaiting_cpf" && session.crmUser) {
     const option = optionFromText(raw);
-    if (option) return runOption(jid, option);
+    if (option) return runOption(jid, option, notify);
     const doc = parseDocumentInput(raw);
     if (doc) return runFaturaLookup(jid, doc);
     return texts(askCpfFaturaMessage());
@@ -945,7 +971,7 @@ export async function handleVendorMessage(jid: string, text: string): Promise<Ve
       option === "venda" ||
       option === "encerrar"
     ) {
-      return runOption(jid, option);
+      return runOption(jid, option, notify);
     }
     if (!session.page) {
       return texts(
