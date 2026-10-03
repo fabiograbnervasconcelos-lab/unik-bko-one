@@ -16,7 +16,7 @@ function deployMeta() {
     gitSha: sha.slice(0, 12),
     faturaOpcao6: true as const,
     vendaOpcao8: true as const,
-    buildId: "venda8-lancado-fix-20261002" as const,
+    buildId: "venda8-fila-async-20261003" as const,
     timezone: "America/Sao_Paulo",
   };
 }

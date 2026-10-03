@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   extractPrevendaCodigo,
   formatVendaLancadaMessage,
+  isNioPapSyncReport,
   matchSellerByCrmUser,
   vendaFoiLancada,
 } from "./nio-pap-crm.ts";
@@ -55,6 +56,28 @@ test("extractPrevendaCodigo lê URL e resumo", () => {
       resumoWhatsapp: "NIO Fibra\nPré-venda: 16029\nCliente: X",
     }),
     "16029",
+  );
+});
+
+test("isNioPapSyncReport distingue job da fila do relatório final", () => {
+  assert.equal(
+    isNioPapSyncReport({
+      id: "abc",
+      status: "running",
+      documento: "921.130.100-97",
+      queue: [],
+    }),
+    false,
+  );
+  assert.equal(
+    isNioPapSyncReport({
+      documento: "921.130.100-97",
+      dias: 30,
+      encontrados: 1,
+      escolhida: { numeroPedido: "1" },
+      resumoWhatsapp: "Pré-venda: 16100",
+    }),
+    true,
   );
 });
 
