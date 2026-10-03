@@ -225,8 +225,10 @@ export async function syncNioPapVenda(params: {
     }),
     signal: AbortSignal.timeout(60_000),
   });
+  // POST pode devolver relatório síncrono (API antiga) ou job na fila (API nova)
   const data = (await response.json().catch(() => null)) as
-    | (NioPapSyncResult & NioPapSyncJob)
+    | NioPapSyncResult
+    | NioPapSyncJob
     | null;
   if (!response.ok || !data) {
     throw new Error(
@@ -234,26 +236,34 @@ export async function syncNioPapVenda(params: {
         `Falha HTTP ${response.status} no lançamento PAP → CRM.`,
     );
   }
-  if (data.error && !data.id && !isNioPapSyncReport(data)) {
-    throw new Error(data.error);
+
+  const job = data as NioPapSyncJob;
+  const postError = typeof data.error === "string" ? data.error : null;
+  if (postError && !job.id && !isNioPapSyncReport(data)) {
+    throw new Error(postError);
   }
 
   // Compat: API antiga devolvia o relatório no próprio POST
-  if (isNioPapSyncReport(data) && !data.id && data.status !== "running" && data.status !== "queued") {
+  if (
+    isNioPapSyncReport(data) &&
+    !job.id &&
+    job.status !== "running" &&
+    job.status !== "queued"
+  ) {
     return data;
   }
 
   // API nova: job enfileirado — espera o report
-  const jobId = data.id;
+  const jobId = job.id;
   if (!jobId) {
     // POST devolveu fila sem id claro: tenta achar o running do mesmo documento
-    const queue = Array.isArray(data.queue) ? data.queue : await fetchNioPapSyncQueue();
+    const queue = Array.isArray(job.queue) ? job.queue : await fetchNioPapSyncQueue();
     const running = [...queue]
       .reverse()
       .find(
-        (job) =>
-          normalizeDocDigits(job.documento) === normalizeDocDigits(params.documento) &&
-          (job.status === "running" || job.status === "queued" || job.status === "done"),
+        (item) =>
+          normalizeDocDigits(item.documento) === normalizeDocDigits(params.documento) &&
+          (item.status === "running" || item.status === "queued" || item.status === "done"),
       );
     if (running?.status === "done" && running.report) return running.report;
     if (running?.id) {
@@ -266,7 +276,7 @@ export async function syncNioPapVenda(params: {
     throw new Error("O PAP não devolveu o id do lançamento na fila.");
   }
 
-  if (data.status === "done" && data.report) return data.report;
+  if (job.status === "done" && job.report) return job.report;
 
   const finished = await waitForNioPapSyncJob(jobId, { documento: params.documento });
   if (finished.report) return finished.report;

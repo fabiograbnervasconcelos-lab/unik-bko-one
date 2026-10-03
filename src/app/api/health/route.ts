@@ -27,7 +27,7 @@ export async function GET() {
       ok: true,
       ts: Date.now(),
       gitSha: sha.slice(0, 12),
-      buildId: "venda8-fila-async-20261003",
+      buildId: "venda8-fila-async-20261003b",
       features: {
         vendorBot,
         faturaOpcao6: true,
