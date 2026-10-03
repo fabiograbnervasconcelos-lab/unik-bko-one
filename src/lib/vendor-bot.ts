@@ -348,7 +348,7 @@ async function runVendaLaunch(
     `Documento: *${docDigits}*\n` +
     `Vendedor: *${vendedorNome || session.crmUser}*\n` +
     `_Última venda dos últimos ${dias} dias._\n` +
-    `_Aviso ✅ Lançado chega quando o sistema confirmar._`;
+    `_Pode levar alguns minutos. O ✅ *Lançado* chega quando a fila do PAP terminar._`;
 
   // Manda o "aguarde" na hora — o sync do PAP pode levar alguns minutos
   if (notify) {
@@ -364,6 +364,7 @@ async function runVendaLaunch(
       papSenha,
       crmUsuario: operator.usuario,
       crmSenha: operator.senha,
+      nome: vendedorNome || session.crmUser,
     });
 
     setVendorPhase(jid, "awaiting_venda", {
@@ -385,21 +386,20 @@ async function runVendaLaunch(
         `resumo=${result.resumoWhatsapp ? "sim" : "não"} lancada=${vendaFoiLancada(result)}`,
     );
 
+    // Sempre prioriza Lançado (a fila async às vezes só traz o report no fim)
+    if (vendaFoiLancada(result)) {
+      return texts(`${formatVendaLancadaMessage(result)}\n\n${afterVendaMessage()}`);
+    }
+    if (result.resumoWhatsapp?.trim() && /pr[eé]-?\s*venda/i.test(result.resumoWhatsapp)) {
+      return texts(
+        `✅ *Lançado*\n\n${result.resumoWhatsapp.trim()}\n\n${afterVendaMessage()}`,
+      );
+    }
+
     if (!result.encontrados || !result.escolhida) {
       return texts(
         `❌ Nenhuma venda de *${result.documento || docDigits}* nos últimos *${result.dias || dias}* dias no PAP.\n\n` +
           afterVendaMessage(),
-      );
-    }
-
-    if (vendaFoiLancada(result)) {
-      return texts(`${formatVendaLancadaMessage(result)}\n\n${afterVendaMessage()}`);
-    }
-
-    // Fallback: se o resumo já veio montado, manda como Lançado mesmo sem crmCodigo tipado
-    if (result.resumoWhatsapp?.trim() && /pr[eé]-?\s*venda/i.test(result.resumoWhatsapp)) {
-      return texts(
-        `✅ *Lançado*\n\n${result.resumoWhatsapp.trim()}\n\n${afterVendaMessage()}`,
       );
     }
 

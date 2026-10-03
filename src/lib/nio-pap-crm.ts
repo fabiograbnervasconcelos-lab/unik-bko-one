@@ -30,9 +30,23 @@ export type NioPapSyncResult = {
   anteriores?: NioPapEscolhida[];
   resultados?: NioPapEscolhida[];
   resumoWhatsapp?: string | null;
-  whatsappEnvios?: Array<{ destino?: string; detalhe?: string }>;
+  whatsappEnvios?: Array<{ destino?: string; detalhe?: string; ok?: boolean }>;
   perguntas?: unknown[];
   error?: string | null;
+};
+
+/** Resposta imediata do POST /api/sync (fila assíncrona). */
+export type NioPapSyncJob = {
+  id?: string;
+  documento?: string | null;
+  nome?: string | null;
+  status?: string | null;
+  error?: string | null;
+  report?: NioPapSyncResult | null;
+  createdAt?: number | null;
+  startedAt?: number | null;
+  finishedAt?: number | null;
+  queue?: NioPapSyncJob[];
 };
 
 function normalizeSellerKey(value: string) {
@@ -113,6 +127,77 @@ export async function listNioPapSellers(params?: {
   return Array.isArray(data.sellers) ? data.sellers : [];
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeDocDigits(value: string | null | undefined) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+/** GET /api/sync — estado da fila. */
+export async function fetchNioPapSyncQueue(): Promise<NioPapSyncJob[]> {
+  const response = await fetch(`${PAP_BASE}/api/sync`, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(30_000),
+  });
+  const data = (await response.json().catch(() => null)) as NioPapSyncJob | null;
+  if (!response.ok || !data) {
+    throw new Error(`Falha HTTP ${response.status} ao consultar a fila do PAP.`);
+  }
+  return Array.isArray(data.queue) ? data.queue : [];
+}
+
+/**
+ * Espera o job da fila chegar em done/error.
+ * A API nova do nio-pap-crm responde o POST na hora e processa em background.
+ */
+export async function waitForNioPapSyncJob(
+  jobId: string,
+  options?: { timeoutMs?: number; intervalMs?: number; documento?: string },
+): Promise<NioPapSyncJob> {
+  const timeoutMs = options?.timeoutMs ?? 280_000;
+  const intervalMs = options?.intervalMs ?? 2_500;
+  const wantDoc = normalizeDocDigits(options?.documento);
+  const started = Date.now();
+
+  while (Date.now() - started < timeoutMs) {
+    const queue = await fetchNioPapSyncQueue();
+    const byId = queue.find((job) => job.id === jobId);
+    const byDoc =
+      !byId && wantDoc
+        ? [...queue]
+            .reverse()
+            .find(
+              (job) =>
+                normalizeDocDigits(job.documento) === wantDoc &&
+                (job.status === "done" || job.status === "error" || job.status === "running"),
+            )
+        : null;
+    const job = byId || byDoc;
+    if (job?.status === "done") return job;
+    if (job?.status === "error") {
+      throw new Error(job.error || "O lançamento falhou na fila do PAP.");
+    }
+    await sleep(intervalMs);
+  }
+  throw new Error("O lançamento no PAP demorou demais. A pré-venda pode ter entrado — confira no CRM.");
+}
+
+/** True se o JSON já é o relatório antigo (sync síncrono). */
+export function isNioPapSyncReport(data: unknown): data is NioPapSyncResult {
+  if (!data || typeof data !== "object") return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    "encontrados" in obj ||
+    "escolhida" in obj ||
+    "resultados" in obj ||
+    "resumoWhatsapp" in obj
+  );
+}
+
 export async function syncNioPapVenda(params: {
   documento: string;
   dias?: number;
@@ -121,6 +206,8 @@ export async function syncNioPapVenda(params: {
   papSenha: string;
   crmUsuario: string;
   crmSenha: string;
+  /** Nome do vendedor (API nova envia no POST). */
+  nome?: string | null;
 }): Promise<NioPapSyncResult> {
   const dias = params.dias ?? papDiasDefault();
   const response = await fetch(`${PAP_BASE}/api/sync`, {
@@ -134,17 +221,66 @@ export async function syncNioPapVenda(params: {
       papSenha: params.papSenha,
       crmUsuario: params.crmUsuario,
       crmSenha: params.crmSenha,
+      ...(params.nome ? { nome: params.nome } : {}),
     }),
-    signal: AbortSignal.timeout(300_000),
+    signal: AbortSignal.timeout(60_000),
   });
-  const data = (await response.json().catch(() => null)) as NioPapSyncResult | null;
+  // POST pode devolver relatório síncrono (API antiga) ou job na fila (API nova)
+  const data = (await response.json().catch(() => null)) as
+    | NioPapSyncResult
+    | NioPapSyncJob
+    | null;
   if (!response.ok || !data) {
-    throw new Error(data?.error || `Falha HTTP ${response.status} no lançamento PAP → CRM.`);
+    throw new Error(
+      (data as { error?: string } | null)?.error ||
+        `Falha HTTP ${response.status} no lançamento PAP → CRM.`,
+    );
   }
-  if (data.error) {
-    throw new Error(data.error);
+
+  const job = data as NioPapSyncJob;
+  const postError = typeof data.error === "string" ? data.error : null;
+  if (postError && !job.id && !isNioPapSyncReport(data)) {
+    throw new Error(postError);
   }
-  return data;
+
+  // Compat: API antiga devolvia o relatório no próprio POST
+  if (
+    isNioPapSyncReport(data) &&
+    !job.id &&
+    job.status !== "running" &&
+    job.status !== "queued"
+  ) {
+    return data;
+  }
+
+  // API nova: job enfileirado — espera o report
+  const jobId = job.id;
+  if (!jobId) {
+    // POST devolveu fila sem id claro: tenta achar o running do mesmo documento
+    const queue = Array.isArray(job.queue) ? job.queue : await fetchNioPapSyncQueue();
+    const running = [...queue]
+      .reverse()
+      .find(
+        (item) =>
+          normalizeDocDigits(item.documento) === normalizeDocDigits(params.documento) &&
+          (item.status === "running" || item.status === "queued" || item.status === "done"),
+      );
+    if (running?.status === "done" && running.report) return running.report;
+    if (running?.id) {
+      const finished = await waitForNioPapSyncJob(running.id, {
+        documento: params.documento,
+      });
+      if (finished.report) return finished.report;
+      throw new Error(finished.error || "Lançamento concluído sem relatório.");
+    }
+    throw new Error("O PAP não devolveu o id do lançamento na fila.");
+  }
+
+  if (job.status === "done" && job.report) return job.report;
+
+  const finished = await waitForNioPapSyncJob(jobId, { documento: params.documento });
+  if (finished.report) return finished.report;
+  throw new Error(finished.error || "Lançamento concluído sem relatório.");
 }
 
 /** Extrai código da pré-venda de campos soltos ou do resumo WhatsApp. */
