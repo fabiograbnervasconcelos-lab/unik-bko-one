@@ -27,7 +27,7 @@ export async function GET() {
       ok: true,
       ts: Date.now(),
       gitSha: sha.slice(0, 12),
-      buildId: "venda8-lancado-fix-20261002",
+      buildId: "filas-excel-20261009",
       features: {
         vendorBot,
         faturaOpcao6: true,
