@@ -218,6 +218,80 @@ export function filterRows(kind: VendorQueryKind, rows: VendorCrmRow[], now = ne
   });
 }
 
+function escapeXml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function excelSheetName(title: string) {
+  const cleaned = title.replace(/[\\/*?:\[\]]/g, " ").replace(/\s+/g, " ").trim();
+  return (cleaned || "Fila").slice(0, 31);
+}
+
+function excelFileSlug(kind: VendorQueryKind) {
+  return kind.replace(/[^a-z0-9_-]/gi, "-");
+}
+
+/** Excel XML (abre no Excel/Sheets) com a fila individual da consulta. */
+export function buildVendorQueueExcel(result: VendorQueryResult): {
+  buffer: Buffer;
+  fileName: string;
+  mimetype: string;
+  caption: string;
+} {
+  const headers = ["#", "Nome", "CPF", "OS", "Status", "Agenda", "Data"];
+  const bodyRows = result.rows.map((row, index) => [
+    String(index + 1),
+    row.name || "",
+    row.cpf || "",
+    row.os || "",
+    row.status || "",
+    row.agenda || "",
+    row.date || "",
+  ]);
+
+  const xmlRows = [headers, ...bodyRows]
+    .map((cells) => {
+      const xmlCells = cells
+        .map((cell) => {
+          const text = escapeXml(String(cell ?? ""));
+          const isNumber = cells === headers ? false : /^[0-9]+$/.test(String(cell ?? ""));
+          const type = isNumber ? "Number" : "String";
+          return `<Cell><Data ss:Type="${type}">${text}</Data></Cell>`;
+        })
+        .join("");
+      return `<Row>${xmlCells}</Row>`;
+    })
+    .join("\n");
+
+  const sheet = excelSheetName(result.title);
+  const xml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<?mso-application progid="Excel.Sheet"?>\n` +
+    `<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" ` +
+    `xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\n` +
+    `<Worksheet ss:Name="${escapeXml(sheet)}">\n` +
+    `<Table>\n${xmlRows}\n</Table>\n` +
+    `</Worksheet>\n</Workbook>\n`;
+
+  const stamp = new Date()
+    .toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })
+    .replace(/\//g, "-");
+  const fileName = `fila-${excelFileSlug(result.kind)}-${stamp}.xls`;
+  const monthBit = result.monthLabel ? ` — ${result.monthLabel}` : "";
+  return {
+    buffer: Buffer.from(xml, "utf8"),
+    fileName,
+    mimetype: "application/vnd.ms-excel",
+    caption:
+      `📊 Excel da fila *${result.title}*${monthBit}\n` +
+      `Quantidade: *${result.count}* — toque para baixar.`,
+  };
+}
+
 export function parseCredentials(text: string): { user: string; pass: string } | null {
   const cleaned = text.replace(/\r/g, "").trim();
   if (!cleaned) return null;
@@ -251,11 +325,11 @@ export function menuMessage(crmUser?: string | null, queriedAt = formatQueryTime
   const who = crmUser ? `\nConta: *${crmUser}*` : "";
   return (
     `*Menu CRM ONE (NIO)*${who}\n\n` +
-    `1️⃣ Instalados — nome + OS _(mês vigente)_\n` +
-    `2️⃣ Agendados _(todos)_\n` +
-    `3️⃣ Tratar quebra / Quebra em tratamento _(todos)_\n` +
-    `4️⃣ Cancelados _(todos)_\n` +
-    `5️⃣ Ag. biometria _(todos)_\n` +
+    `1️⃣ Instalados — nome + OS _(mês vigente + Excel)_\n` +
+    `2️⃣ Agendados _(todos + Excel)_\n` +
+    `3️⃣ Tratar quebra / Quebra em tratamento _(todos + Excel)_\n` +
+    `4️⃣ Cancelados _(todos + Excel)_\n` +
+    `5️⃣ Ag. biometria _(todos + Excel)_\n` +
     `6️⃣ Faturas clientes\n` +
     `7️⃣ Cobertura Nio Fibra\n` +
     `8️⃣ Colocar a venda no CRM\n` +
@@ -618,6 +692,7 @@ export function formatQueryResultMessages(result: VendorQueryResult): string[] {
 
   const monthBit = result.monthLabel ? ` — ${result.monthLabel}` : "";
   const header = `📋 *${result.title}*${monthBit}\n*Quantidade: ${result.count}*`;
+  const excelHint = `📎 Em seguida envio o *Excel* desta fila para baixar.`;
 
   if (!result.count) {
     return [`${header}\n\nNenhum registro encontrado.\n\n${askMore}\n\n${footer}`];
@@ -625,7 +700,7 @@ export function formatQueryResultMessages(result: VendorQueryResult): string[] {
 
   const lines = result.rows.map((row, index) => formatRowLine(row, index + 1, result.kind));
   const messages: string[] = [];
-  let chunk = `${header}\n\n`;
+  let chunk = `${header}\n${excelHint}\n\n`;
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];

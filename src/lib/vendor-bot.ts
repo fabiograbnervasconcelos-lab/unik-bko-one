@@ -35,6 +35,7 @@ import {
   askPapSenhaMessage,
   askPasswordMessage,
   askUserOnlyMessage,
+  buildVendorQueueExcel,
   coberturaComplementoOptions,
   coberturaEnderecoOptions,
   declinesCobertura,
@@ -70,7 +71,14 @@ export {
 
 export type VendorOutgoing =
   | { kind: "text"; text: string }
-  | { kind: "pdf"; data: Buffer; fileName: string; caption?: string };
+  | { kind: "pdf"; data: Buffer; fileName: string; caption?: string }
+  | {
+      kind: "document";
+      data: Buffer;
+      fileName: string;
+      mimetype: string;
+      caption?: string;
+    };
 
 /** Envia aviso imediato (ex.: "⏳ Lançando…") antes do fim do handler. */
 export type VendorNotify = (text: string) => Promise<void>;
@@ -886,7 +894,22 @@ async function runOption(
     const page = await getVendorPage(jid);
     const result = await runVendorCrmQuery(page, kind);
     setVendorPhase(jid, "menu", { busy: false, cobertura: null, venda: null });
-    return formatQueryResultMessages(result).map((text) => ({ kind: "text" as const, text }));
+    const outgoing: VendorOutgoing[] = formatQueryResultMessages(result).map((text) => ({
+      kind: "text" as const,
+      text,
+    }));
+    // Filas 1–5: Excel individual para baixar (além do texto no chat)
+    if (result.count > 0 && result.kind !== "faturas") {
+      const excel = buildVendorQueueExcel(result);
+      outgoing.push({
+        kind: "document",
+        data: excel.buffer,
+        fileName: excel.fileName,
+        mimetype: excel.mimetype,
+        caption: excel.caption,
+      });
+    }
+    return outgoing;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log("error", `Busca CRM vendedor falhou (${kind}): ${message}`);

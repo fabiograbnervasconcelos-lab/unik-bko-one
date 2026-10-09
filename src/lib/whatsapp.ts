@@ -173,16 +173,29 @@ async function replyPdf(
   fileName: string,
   caption?: string,
 ) {
+  return replyDocument(remoteJid, data, fileName, "application/pdf", caption);
+}
+
+async function replyDocument(
+  remoteJid: string,
+  data: Buffer,
+  fileName: string,
+  mimetype: string,
+  caption?: string,
+) {
   if (!runtime.socket) return;
   await runtime.socket
     .sendMessage(remoteJid, {
       document: data,
-      mimetype: "application/pdf",
+      mimetype,
       fileName,
       caption,
     })
     .catch((error) => {
-      log("warn", `Falha ao enviar PDF WhatsApp (${remoteJid}): ${String(error)}`);
+      log(
+        "warn",
+        `Falha ao enviar documento WhatsApp (${remoteJid}, ${fileName}): ${String(error)}`,
+      );
     });
 }
 
@@ -269,6 +282,14 @@ async function handleIncomingCommand(message: WAMessage) {
         await replyText(replyJid, reply.text);
       } else if (reply.kind === "pdf") {
         await replyPdf(replyJid, reply.data, reply.fileName, reply.caption);
+      } else if (reply.kind === "document") {
+        await replyDocument(
+          replyJid,
+          reply.data,
+          reply.fileName,
+          reply.mimetype,
+          reply.caption,
+        );
       }
     }
   } catch (error) {

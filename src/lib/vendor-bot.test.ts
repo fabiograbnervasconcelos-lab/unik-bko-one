@@ -9,6 +9,7 @@ import {
   extractCpf,
   extractOs,
   filterRows,
+  buildVendorQueueExcel,
   formatQueryResult,
   formatQueryResultMessages,
   formatQueryTimestamp,
@@ -195,11 +196,76 @@ test("menu CRM ONE com emojis e rodapé de consulta", () => {
   assert.match(menu, /Logado/);
   assert.match(menu, /Menu CRM ONE \(NIO\)/);
   assert.match(menu, /1️⃣/);
+  assert.match(menu, /Excel/);
   assert.match(menu, /7️⃣ Cobertura/);
   assert.match(menu, /8️⃣ Colocar a venda no CRM/);
   assert.match(menu, /9️⃣ Encerrar/);
   assert.match(menu, /Consulta realizada em 19\/09\/2026 às 15:36/);
   assert.match(menuMessage("Elisangela"), /Menu CRM ONE/);
+});
+
+test("buildVendorQueueExcel gera planilha da fila individual", () => {
+  const excel = buildVendorQueueExcel({
+    kind: "agendados",
+    title: "Agendados",
+    count: 2,
+    monthLabel: null,
+    queriedAt: "09/10/2026 às 15:00",
+    rows: [
+      {
+        name: "JOAO",
+        os: "111",
+        cpf: "591.028.530-00",
+        status: "agendado",
+        agenda: "10/10/2026 (Manhã)",
+        agendaDate: "10/10/2026",
+        date: "10/10/2026",
+        raw: "JOAO",
+      },
+      {
+        name: "MARIA",
+        os: "222",
+        cpf: "100.200.300-40",
+        status: "agendado",
+        agenda: null,
+        agendaDate: null,
+        date: "11/10/2026",
+        raw: "MARIA",
+      },
+    ],
+  });
+  const xml = excel.buffer.toString("utf8");
+  assert.match(excel.fileName, /^fila-agendados-.*\.xls$/);
+  assert.equal(excel.mimetype, "application/vnd.ms-excel");
+  assert.match(excel.caption, /Excel da fila/);
+  assert.match(xml, /Workbook/);
+  assert.match(xml, /JOAO/);
+  assert.match(xml, /591\.028\.530-00/);
+  assert.match(xml, /MARIA/);
+  assert.match(xml, /<Data ss:Type="String">OS<\/Data>/);
+});
+
+test("lista da fila avisa que o Excel vem em seguida", () => {
+  const messages = formatQueryResultMessages({
+    kind: "quebra",
+    title: "Tratar quebra / Quebra em tratamento",
+    count: 1,
+    monthLabel: null,
+    queriedAt: "09/10/2026 às 15:00",
+    rows: [
+      {
+        name: "CLIENTE",
+        os: null,
+        cpf: "591.028.530-00",
+        status: "tratar quebra",
+        agenda: null,
+        agendaDate: null,
+        date: null,
+        raw: "CLIENTE",
+      },
+    ],
+  });
+  assert.match(messages.join("\n"), /Excel.*baixar/i);
 });
 
 test("horário da consulta usa fuso de Brasília", () => {
