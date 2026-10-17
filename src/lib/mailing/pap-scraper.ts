@@ -17,6 +17,40 @@ import type { LeadPartData, MailingLead, ScrapeProgress } from "@/lib/mailing/ty
 const PAP_HOME = "https://pap.niointernet.com.br/";
 const PAP_HISTORICO = "https://pap.niointernet.com.br/administrativo/historico";
 
+const globalScrapeCtl = globalThis as typeof globalThis & {
+  mailingScrapeCancelRequested?: boolean;
+  mailingScrapeBrowser?: Browser | null;
+};
+
+export class ScrapeCancelledError extends Error {
+  constructor(message = "Busca cancelada pelo usuário.") {
+    super(message);
+    this.name = "ScrapeCancelledError";
+  }
+}
+
+export function requestCancelScrape() {
+  globalScrapeCtl.mailingScrapeCancelRequested = true;
+  const browser = globalScrapeCtl.mailingScrapeBrowser;
+  if (browser) {
+    void browser.close().catch(() => undefined);
+  }
+}
+
+export function clearCancelScrape() {
+  globalScrapeCtl.mailingScrapeCancelRequested = false;
+}
+
+export function isScrapeCancelRequested() {
+  return Boolean(globalScrapeCtl.mailingScrapeCancelRequested);
+}
+
+function assertNotCancelled() {
+  if (isScrapeCancelRequested()) {
+    throw new ScrapeCancelledError();
+  }
+}
+
 export type PapSaleType = "interesse" | "venda";
 
 export type PapScrapeOptions = {
@@ -128,6 +162,7 @@ async function loginPap(page: Page, email: string, password: string) {
   const deadline = Date.now() + 120_000;
   let lastLoggedUrl = "";
   while (Date.now() < deadline) {
+    assertNotCancelled();
     const url = page.url();
     if (url !== lastLoggedUrl) {
       scrapeLog(`Login: URL = ${url}`, { currentUrl: url });
@@ -401,6 +436,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     throw new Error("Credenciais do PAP não configuradas.");
   }
 
+  clearCancelScrape();
   updateProgress({
     ...defaultScrapeProgress(),
     state: "running",
@@ -428,7 +464,9 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
 
   try {
     scrapeLog("Abrindo Chromium (Playwright)…");
+    assertNotCancelled();
     browser = await launchBrowser();
+    globalScrapeCtl.mailingScrapeBrowser = browser;
     // Force Brazil timezone — PAP returns 400 with UTC (+00:00) offsets
     const brContext = await browser.newContext({
       viewport: { width: 1440, height: 900 },
@@ -458,28 +496,35 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
       }
     });
 
+    assertNotCancelled();
     await loginPap(page, creds.email, creds.password);
+    assertNotCancelled();
 
     scrapeLog(`Abrindo filtros · Tipo = ${tipoLabel}`);
     await openFilters(page);
+    assertNotCancelled();
     await selectTipo(page, tipoLabel);
     scrapeLog(`Tipo selecionado: ${tipoLabel}`);
 
     if (saleType === "venda") {
+      assertNotCancelled();
       scrapeLog(`Selecionando Status Primário = ${STATUS_PRIMARIO_VENDA}`);
       await selectStatusPrimario(page, STATUS_PRIMARIO_VENDA);
       scrapeLog("Status Primário OK (Aguardando tratamento).");
     }
 
+    assertNotCancelled();
     scrapeLog(`Definindo período ${options.dateFrom} → ${options.dateTo}`);
     const v1 = await pickCalendarDay(page, "De", from.day);
     scrapeLog(`Data De = ${v1}`);
+    assertNotCancelled();
     const v2 = await pickCalendarDay(page, "Até", to.day);
     scrapeLog(`Data Até = ${v2}`);
     if (!v1.includes(String(from.day)) || !v2.includes(String(to.day))) {
       throw new Error(`Falha ao definir datas (De=${v1}, Até=${v2}).`);
     }
 
+    assertNotCancelled();
     scrapeLog("Aplicando filtros no PAP (aguarde a lista)…");
     pageBuckets.length = 0;
     await applyFilter(page);
@@ -491,6 +536,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     const maxPages = options.maxPages ?? 50;
     let pageNo = 1;
     while (pageNo <= maxPages) {
+      assertNotCancelled();
       scrapeLog(
         saleType === "venda"
           ? `Lendo página ${pageNo} (Venda / Aguardando tratamento)…`
@@ -503,6 +549,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
       const latest = pageBuckets[pageBuckets.length - 1] || [];
       scrapeLog(`Página ${pageNo}: ${latest.length} linha(s) na captura da API.`);
       for (const venda of latest) {
+        assertNotCancelled();
         const papId = String(venda._id || venda.numeroPedido || "");
         if (!papId || seenIds.has(papId)) continue;
         seenIds.add(papId);
@@ -581,15 +628,32 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
       leads: collected,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const cancelled =
+      error instanceof ScrapeCancelledError ||
+      isScrapeCancelRequested() ||
+      (error instanceof Error && /Target (page|context|browser) has been closed|cancelled|cancelad/i.test(error.message));
+    const message = cancelled
+      ? "Busca interrompida. Ajuste data/tipo e clique em Buscar novamente."
+      : error instanceof Error
+        ? error.message
+        : String(error);
     const current = loadScrapeProgress();
-    scrapeLog(`ERRO: ${message}`, {
-      state: "error",
+    scrapeLog(cancelled ? `PARADO: ${message}` : `ERRO: ${message}`, {
+      state: cancelled ? "cancelled" : "error",
       finishedAt: new Date().toISOString(),
-      errors: [...current.errors, message].slice(-20),
+      errors: cancelled ? current.errors : [...current.errors, message].slice(-20),
     });
-    throw error;
+    if (!cancelled) throw error;
+    return {
+      imported: loadScrapeProgress().imported,
+      skipped: loadScrapeProgress().skipped,
+      processed: loadScrapeProgress().processed,
+      leads: collected,
+      cancelled: true,
+    };
   } finally {
+    globalScrapeCtl.mailingScrapeBrowser = null;
+    clearCancelScrape();
     await browser?.close().catch(() => undefined);
   }
 }

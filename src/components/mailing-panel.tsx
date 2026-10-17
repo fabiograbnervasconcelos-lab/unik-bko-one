@@ -157,7 +157,7 @@ export function MailingPanel() {
         const stillRunning = Boolean(data.running) || data.progress?.state === "running";
         if (!stillRunning) {
           setScrapeRunning(false);
-          if (data.progress?.state === "done") {
+          if (data.progress?.state === "done" || data.progress?.state === "cancelled") {
             setQueue("transferir");
             await refreshLeads("transferir");
           }
@@ -275,6 +275,28 @@ export function MailingPanel() {
       setScrapeMsg(data.progress?.message || "Busca iniciada — acompanhe o log ao vivo.");
       setScrapeRunning(true);
     });
+  }
+
+  async function stopScrape() {
+    setScrapeMsg("Parando busca…");
+    try {
+      const res = await fetch("/api/mailing/scrape", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "stop" }),
+      });
+      const data = await res.json();
+      if (Array.isArray(data.progress?.logs)) setScrapeLogs(data.progress.logs);
+      setScrapeMsg(
+        data.message ||
+          data.progress?.message ||
+          "Parada solicitada. Ajuste data/tipo e busque de novo.",
+      );
+      // Mantém poll até o job marcar cancelled/idle
+      setScrapeRunning(true);
+    } catch {
+      setScrapeMsg("Falha ao solicitar parada.");
+    }
   }
 
   async function uploadExcel(file: File) {
@@ -488,11 +510,25 @@ export function MailingPanel() {
                 {scrapeRunning ? "Buscando no PAP…" : "Buscar no PAP"}
               </Button>
               {scrapeRunning ? (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={pending}
+                  onClick={stopScrape}
+                >
+                  Parar
+                </Button>
+              ) : null}
+              {scrapeRunning ? (
                 <span className="self-center text-xs uppercase tracking-wider text-emerald-300">
-                  Log ao vivo · {scrapeState}
+                  Log ao vivo · {scrapeState} — pode mudar data/tipo e clicar Parar
                 </span>
               ) : null}
             </div>
+            <p className="text-xs text-white/50">
+              Durante a busca, altere data ou tipo e clique em <strong>Parar</strong> para
+              interromper e depois <strong>Buscar no PAP</strong> de novo.
+            </p>
             {scrapeMsg ? <p className="text-sm text-sky-200">{scrapeMsg}</p> : null}
             <div className="space-y-2">
               <Label>Log ao vivo do acesso PAP</Label>

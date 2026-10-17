@@ -7,6 +7,7 @@ import {
 } from "@/lib/mailing/store";
 import {
   normalizeSaleType,
+  requestCancelScrape,
   runPapHistoricoScrape,
   type PapSaleType,
 } from "@/lib/mailing/pap-scraper";
@@ -49,23 +50,67 @@ export async function GET() {
   });
 }
 
+export async function DELETE() {
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+  if (!canScrapePap(user.role)) {
+    return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
+  }
+  if (!isScrapeRunning() && loadScrapeProgress().state !== "running") {
+    return NextResponse.json({
+      ok: true,
+      stopped: false,
+      message: "Nenhuma busca em andamento.",
+      progress: loadScrapeProgress(),
+    });
+  }
+  requestCancelScrape();
+  return NextResponse.json({
+    ok: true,
+    stopped: true,
+    message: "Parada solicitada — aguarde o browser fechar.",
+    progress: loadScrapeProgress(),
+  });
+}
+
 export async function POST(request: Request) {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
   if (!canScrapePap(user.role)) {
     return NextResponse.json({ error: "Sem permissão para buscar no PAP." }, { status: 403 });
   }
-  if (isScrapeRunning()) {
-    return NextResponse.json({ error: "Já existe uma busca em andamento." }, { status: 409 });
-  }
 
   const body = (await request.json().catch(() => null)) as {
+    action?: string;
     dateFrom?: string;
     dateTo?: string;
     saleType?: string;
     papEmail?: string;
     papPassword?: string;
   } | null;
+
+  // Parar busca em andamento (também via POST action=stop)
+  if (body?.action === "stop" || body?.action === "cancel") {
+    if (!isScrapeRunning() && loadScrapeProgress().state !== "running") {
+      return NextResponse.json({
+        ok: true,
+        stopped: false,
+        message: "Nenhuma busca em andamento.",
+        progress: loadScrapeProgress(),
+      });
+    }
+    requestCancelScrape();
+    return NextResponse.json({
+      ok: true,
+      stopped: true,
+      message: "Parada solicitada — aguarde o browser fechar.",
+      progress: loadScrapeProgress(),
+    });
+  }
+
+  if (isScrapeRunning()) {
+    return NextResponse.json({ error: "Já existe uma busca em andamento. Clique em Parar antes." }, { status: 409 });
+  }
 
   const dateFrom = (body?.dateFrom || DEFAULT_DATE_FROM).trim();
   const dateTo = (body?.dateTo || DEFAULT_DATE_TO).trim();
