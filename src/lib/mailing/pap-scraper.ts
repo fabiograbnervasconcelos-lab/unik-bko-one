@@ -669,30 +669,74 @@ function mapVendaToLead(
   };
 }
 
-async function gotoNextResultsPage(page: Page) {
-  const next = page.locator(
-    "button[aria-label*='next' i], button[aria-label*='próxim' i], .MuiTablePagination-actions button:last-child, button:has(svg[data-testid='KeyboardArrowRightIcon'])",
-  );
-  // MUI table pagination usually has two buttons; last enabled is next
+/**
+ * Avança UMA página (seta >), nunca a última (seta >|).
+ * MUI TablePagination com first/last: [primeira, anterior, próxima, última].
+ */
+async function resolveNextPageButton(page: Page) {
   const actions = page.locator(".MuiTablePagination-actions button");
-  if (await actions.count()) {
-    const last = actions.last();
-    if (await last.isDisabled()) return false;
-    await humanPause(1200, 2200);
-    await last.click({ force: true });
-    await sleep(6000);
-    await humanPause(1000, 1800);
-    return true;
+  const count = await actions.count();
+
+  const byIcon = page
+    .locator(".MuiTablePagination-actions button")
+    .filter({
+      has: page.locator(
+        "svg[data-testid='KeyboardArrowRightIcon'], svg[data-testid='NavigateNextIcon']",
+      ),
+    })
+    .first();
+  if (await byIcon.count()) return byIcon;
+
+  const byAria = page.locator(
+    [
+      ".MuiTablePagination-actions button[aria-label='next page']",
+      ".MuiTablePagination-actions button[aria-label='Next page']",
+      ".MuiTablePagination-actions button[aria-label='próxima página']",
+      ".MuiTablePagination-actions button[aria-label='Próxima página']",
+      ".MuiTablePagination-actions button[aria-label='Go to next page']",
+    ].join(", "),
+  );
+  if (await byAria.count()) return byAria.first();
+
+  // Posição: 4 botões → índice 2 (próxima); 2 botões → índice 1 (próxima).
+  // Nunca actions.last() quando há 4 — isso é a ÚLTIMA página (>|).
+  if (count >= 4) return actions.nth(2);
+  if (count === 2) return actions.nth(1);
+  if (count === 1) return actions.first();
+  return null;
+}
+
+async function gotoNextResultsPage(page: Page) {
+  await humanPause(800, 1400);
+
+  const nextBtn = await resolveNextPageButton(page);
+  if (!nextBtn) {
+    scrapeLog("Botão próxima página (>) não encontrado.");
+    return false;
   }
-  if (await next.count()) {
-    const btn = next.last();
-    if (await btn.isDisabled()) return false;
-    await humanPause(1200, 2200);
-    await btn.click({ force: true });
-    await sleep(6000);
-    return true;
+
+  const label = (
+    (await nextBtn.getAttribute("aria-label").catch(() => "")) || ""
+  ).toLowerCase();
+  if (/last|última|ultima/.test(label)) {
+    scrapeLog(
+      `Paginação: recusei clique em "${label || "última"}" — preciso da seta >.`,
+    );
+    return false;
   }
-  return false;
+
+  if (await nextBtn.isDisabled().catch(() => true)) {
+    scrapeLog("Botão próxima página (>) desabilitado — fim da lista.");
+    return false;
+  }
+
+  scrapeLog(
+    `Clicando seta próxima página (>) ${label ? `[${label}] ` : ""}— uma página por vez…`,
+  );
+  await nextBtn.click({ force: true });
+  await sleep(6000);
+  await humanPause(1000, 1800);
+  return true;
 }
 
 export async function runPapHistoricoScrape(options: PapScrapeOptions) {
@@ -820,8 +864,10 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
 
     // Venda e Interesse: mailing sai da lista (/api/portal/vendas).
     // Não clicar em Detalhar / Avançar — dados já vêm na primeira página da lista.
-    const maxPages = options.maxPages ?? 50;
+    // Paginação: sempre seta > (próxima), nunca >| (última). Limite alto p/ listas grandes.
+    const maxPages = options.maxPages ?? 2000;
     let pageNo = 1;
+    let consumedBuckets = 0;
     while (pageNo <= maxPages) {
       assertNotCancelled();
       scrapeLog(
@@ -831,9 +877,15 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         { page: pageNo },
       );
 
-      // Wait a bit for response capture
-      await sleep(1500);
-      const latest = pageBuckets[pageBuckets.length - 1] || [];
+      // Espera captura da API desta página (novo bucket após Filtrar / próxima)
+      for (let w = 0; w < 20 && pageBuckets.length <= consumedBuckets; w++) {
+        await sleep(500);
+      }
+      const latest =
+        pageBuckets.length > consumedBuckets
+          ? pageBuckets[pageBuckets.length - 1] || []
+          : pageBuckets[pageBuckets.length - 1] || [];
+      consumedBuckets = pageBuckets.length;
       scrapeLog(`Página ${pageNo}: ${latest.length} linha(s) na captura da API.`);
       await captureLiveShot(page, `pagina-${pageNo}`);
       for (const venda of latest) {
@@ -901,9 +953,24 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
       }
 
       scrapeLog(`Página ${pageNo} concluída · avançando paginação…`);
+      if (pageNo >= maxPages) {
+        scrapeLog(`Limite de ${maxPages} páginas atingido — parei a paginação.`);
+        break;
+      }
+      const bucketsBeforeNext = pageBuckets.length;
       const moved = await gotoNextResultsPage(page);
       if (!moved) {
         scrapeLog("Fim da paginação.");
+        break;
+      }
+      // Garante que a próxima iteração use a resposta da nova página
+      for (let w = 0; w < 24 && pageBuckets.length <= bucketsBeforeNext; w++) {
+        await sleep(500);
+      }
+      if (pageBuckets.length <= bucketsBeforeNext) {
+        scrapeLog(
+          "Paginação: cliquei > mas a API não devolveu página nova — encerrando.",
+        );
         break;
       }
       pageNo += 1;
