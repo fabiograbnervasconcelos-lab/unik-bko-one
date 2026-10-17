@@ -120,24 +120,32 @@ export async function updateUsers(
   });
 }
 
+function looksLikeEmail(value: string | undefined | null) {
+  const v = String(value || "").trim();
+  return v.includes("@") && v.length >= 5;
+}
+
 export function loadPapCredentials(): PapCredentials {
   const fromFile = readJson<Partial<PapCredentials>>(PAP_PATH, {});
+  const envEmail =
+    process.env.PAP_USER || process.env.NIO_PAP_USER || "TT829944@vtalcorp.onmicrosoft.com";
+  const envPass = process.env.PAP_PASS || process.env.NIO_PAP_PASS || "Niosuper001one";
+  // Arquivo só vale se o e-mail parecer e-mail (evita sobrescrever com "fabio" do login mailing)
+  const fileEmail = looksLikeEmail(fromFile.email) ? String(fromFile.email).trim() : "";
+  const filePass = String(fromFile.password || "").trim();
   return {
-    email:
-      fromFile.email ||
-      process.env.PAP_USER ||
-      process.env.NIO_PAP_USER ||
-      "TT829944@vtalcorp.onmicrosoft.com",
-    password:
-      fromFile.password ||
-      process.env.PAP_PASS ||
-      process.env.NIO_PAP_PASS ||
-      "Niosuper001one",
+    email: fileEmail || envEmail,
+    password: filePass || envPass,
   };
 }
 
 export function savePapCredentials(creds: PapCredentials) {
-  writeJson(PAP_PATH, creds);
+  const email = String(creds.email || "").trim();
+  const password = String(creds.password || "").trim();
+  if (!looksLikeEmail(email)) {
+    throw new Error("Login PAP inválido: use o e-mail completo (ex.: TT829944@vtalcorp.onmicrosoft.com).");
+  }
+  writeJson(PAP_PATH, { email, password });
 }
 
 export function defaultScrapeProgress(): ScrapeProgress {
