@@ -73,10 +73,21 @@ export async function POST(request: Request) {
 
   if (body?.papEmail || body?.papPassword) {
     const current = loadPapCredentials();
-    savePapCredentials({
-      email: (body.papEmail || current.email).trim(),
-      password: body.papPassword || current.password,
-    });
+    const nextEmail = (body.papEmail || current.email).trim();
+    // Ignora valor que não é e-mail (ex.: usuário do mailing "fabio")
+    if (nextEmail.includes("@")) {
+      try {
+        savePapCredentials({
+          email: nextEmail,
+          password: body.papPassword || current.password,
+        });
+      } catch (err) {
+        return NextResponse.json(
+          { error: err instanceof Error ? err.message : String(err) },
+          { status: 400 },
+        );
+      }
+    }
   }
 
   setScrapeRunning(true);

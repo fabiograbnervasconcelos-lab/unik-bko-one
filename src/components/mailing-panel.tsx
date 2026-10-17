@@ -256,7 +256,8 @@ export function MailingPanel() {
           dateFrom,
           dateTo,
           saleType,
-          papEmail: papEmail || undefined,
+          // Só envia login PAP se parecer e-mail (não misturar com usuário mailing)
+          papEmail: papEmail.includes("@") ? papEmail.trim() : undefined,
           papPassword: papPassword || undefined,
         }),
       });
