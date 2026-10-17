@@ -492,11 +492,12 @@ export function MailingPanel() {
               <thead>
                 <tr>
                   {isManager && queue === "transferir" ? <th></th> : null}
+                  <th>Tipo</th>
+                  <th>Pedido</th>
                   <th>Nome</th>
                   <th>Telefone</th>
-                  <th>CPF</th>
+                  <th>Status</th>
                   <th>Plano</th>
-                  <th>Origem</th>
                   <th>Ações</th>
                 </tr>
               </thead>
@@ -512,6 +513,12 @@ export function MailingPanel() {
                         />
                       </td>
                     ) : null}
+                    <td className="uppercase text-sky-200">
+                      {lead.saleType || "interesse"}
+                    </td>
+                    <td className="font-mono text-xs text-white/90">
+                      {lead.part1?.numeroPedido || lead.papId || "—"}
+                    </td>
                     <td>
                       <div className="font-medium text-white">{lead.name}</div>
                       {lead.city ? (
@@ -519,9 +526,8 @@ export function MailingPanel() {
                       ) : null}
                     </td>
                     <td>{lead.phone}</td>
-                    <td>{lead.document || "—"}</td>
+                    <td>{lead.part1?.status || "—"}</td>
                     <td>{lead.plan || lead.planData?.plano || "—"}</td>
-                    <td>{lead.source}</td>
                     <td className="space-x-1 whitespace-nowrap">
                       {user.role === "vendedor" || isManager ? (
                         <>
