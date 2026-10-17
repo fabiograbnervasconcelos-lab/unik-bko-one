@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -65,6 +65,10 @@ export function MailingPanel() {
   const [papEmail, setPapEmail] = useState("");
   const [papPassword, setPapPassword] = useState("");
   const [scrapeMsg, setScrapeMsg] = useState("");
+  const [scrapeLogs, setScrapeLogs] = useState<string[]>([]);
+  const [scrapeRunning, setScrapeRunning] = useState(false);
+  const [scrapeState, setScrapeState] = useState<string>("idle");
+  const logBoxRef = useRef<HTMLPreElement | null>(null);
   const [manual, setManual] = useState({ name: "", phone: "", document: "", notes: "" });
   const [newUser, setNewUser] = useState({
     name: "",
@@ -116,6 +120,9 @@ export function MailingPanel() {
     }
     if (data.papUser) setPapEmail(data.papUser);
     if (data.progress?.message) setScrapeMsg(data.progress.message);
+    if (Array.isArray(data.progress?.logs)) setScrapeLogs(data.progress.logs);
+    if (data.progress?.state) setScrapeState(data.progress.state);
+    if (data.running) setScrapeRunning(true);
   }
 
   useEffect(() => {
@@ -134,6 +141,45 @@ export function MailingPanel() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Poll do log ao vivo enquanto a busca PAP estiver rodando
+  useEffect(() => {
+    if (!user || !scrapeRunning) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch("/api/mailing/scrape", { cache: "no-store" });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (Array.isArray(data.progress?.logs)) setScrapeLogs(data.progress.logs);
+        if (data.progress?.message) setScrapeMsg(data.progress.message);
+        if (data.progress?.state) setScrapeState(data.progress.state);
+        const stillRunning = Boolean(data.running) || data.progress?.state === "running";
+        if (!stillRunning) {
+          setScrapeRunning(false);
+          if (data.progress?.state === "done") {
+            setQueue("transferir");
+            await refreshLeads("transferir");
+          }
+        }
+      } catch {
+        // ignore transient poll errors
+      }
+    };
+    void tick();
+    const id = window.setInterval(() => void tick(), 1200);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, scrapeRunning]);
+
+  useEffect(() => {
+    const el = logBoxRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [scrapeLogs]);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -198,6 +244,9 @@ export function MailingPanel() {
 
   async function runScrape() {
     setScrapeMsg("Iniciando busca humana no PAP…");
+    setScrapeLogs([]);
+    setScrapeState("running");
+    setScrapeRunning(true);
     setMessage("");
     startTransition(async () => {
       const res = await fetch("/api/mailing/scrape", {
@@ -213,16 +262,17 @@ export function MailingPanel() {
       });
       const data = await res.json();
       if (!res.ok) {
+        setScrapeRunning(false);
+        setScrapeState("error");
         setScrapeMsg(data.error || data.progress?.message || "Erro na busca");
+        if (Array.isArray(data.progress?.logs)) setScrapeLogs(data.progress.logs);
         return;
       }
-      setScrapeMsg(
-        data.progress?.message ||
-          `Importados ${data.result?.imported ?? 0} (pulados ${data.result?.skipped ?? 0})`,
-      );
+      // 202 Accepted — job em background; o poll atualiza o log ao vivo
       setPapPassword("");
-      setQueue("transferir");
-      await refreshLeads("transferir");
+      if (Array.isArray(data.progress?.logs)) setScrapeLogs(data.progress.logs);
+      setScrapeMsg(data.progress?.message || "Busca iniciada — acompanhe o log ao vivo.");
+      setScrapeRunning(true);
     });
   }
 
@@ -429,11 +479,28 @@ export function MailingPanel() {
               </div>
             </div>
             <div className="flex flex-wrap gap-3">
-              <Button className="mailing-cta" disabled={pending} onClick={runScrape}>
-                {pending ? "Buscando no PAP…" : "Buscar no PAP"}
+              <Button
+                className="mailing-cta"
+                disabled={pending || scrapeRunning}
+                onClick={runScrape}
+              >
+                {scrapeRunning ? "Buscando no PAP…" : "Buscar no PAP"}
               </Button>
+              {scrapeRunning ? (
+                <span className="self-center text-xs uppercase tracking-wider text-emerald-300">
+                  Log ao vivo · {scrapeState}
+                </span>
+              ) : null}
             </div>
             {scrapeMsg ? <p className="text-sm text-sky-200">{scrapeMsg}</p> : null}
+            <div className="space-y-2">
+              <Label>Log ao vivo do acesso PAP</Label>
+              <pre ref={logBoxRef} className="mailing-log" aria-live="polite">
+                {scrapeLogs.length
+                  ? scrapeLogs.join("\n")
+                  : "Clique em Buscar no PAP para ver cada passo do login, filtros e importação…"}
+              </pre>
+            </div>
           </section>
         ) : null}
 

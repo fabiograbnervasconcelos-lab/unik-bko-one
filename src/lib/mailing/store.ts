@@ -144,6 +144,7 @@ export function defaultScrapeProgress(): ScrapeProgress {
   return {
     state: "idle",
     message: "Pronto para buscar interesses no PAP.",
+    logs: [],
     dateFrom: "16/10/2026",
     dateTo: "16/10/2026",
     saleType: "interesse",
@@ -155,12 +156,15 @@ export function defaultScrapeProgress(): ScrapeProgress {
     startedAt: null,
     finishedAt: null,
     lastLeadName: null,
+    currentUrl: null,
   };
 }
 
 export function loadScrapeProgress(): ScrapeProgress {
   if (globalMailing.mailingScrape) return globalMailing.mailingScrape;
   const progress = readJson<ScrapeProgress>(SCRAPE_PATH, defaultScrapeProgress());
+  // Compatível com progress antigo sem `logs`
+  if (!Array.isArray(progress.logs)) progress.logs = [];
   globalMailing.mailingScrape = progress;
   return progress;
 }

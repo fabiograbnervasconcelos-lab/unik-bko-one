@@ -19,7 +19,17 @@ const DEFAULT_DATE_FROM = "16/10/2026";
 const DEFAULT_DATE_TO = "16/10/2026";
 const DEFAULT_SALE_TYPE: PapSaleType = "interesse";
 
-let scrapeRunning = false;
+const globalScrape = globalThis as typeof globalThis & {
+  mailingScrapeRunning?: boolean;
+};
+
+function isScrapeRunning() {
+  return Boolean(globalScrape.mailingScrapeRunning);
+}
+
+function setScrapeRunning(value: boolean) {
+  globalScrape.mailingScrapeRunning = value;
+}
 
 export async function GET() {
   const user = await getSessionUser();
@@ -28,7 +38,7 @@ export async function GET() {
   const creds = loadPapCredentials();
   return NextResponse.json({
     progress,
-    running: scrapeRunning,
+    running: isScrapeRunning() || progress.state === "running",
     defaults: {
       dateFrom: progress.dateFrom || DEFAULT_DATE_FROM,
       dateTo: progress.dateTo || DEFAULT_DATE_TO,
@@ -45,7 +55,7 @@ export async function POST(request: Request) {
   if (!canScrapePap(user.role)) {
     return NextResponse.json({ error: "Sem permissão para buscar no PAP." }, { status: 403 });
   }
-  if (scrapeRunning) {
+  if (isScrapeRunning()) {
     return NextResponse.json({ error: "Já existe uma busca em andamento." }, { status: 409 });
   }
 
@@ -69,20 +79,25 @@ export async function POST(request: Request) {
     });
   }
 
-  scrapeRunning = true;
-  try {
-    // Fire and wait — mailing scrape can take minutes; client polls GET
-    const result = await runPapHistoricoScrape({ dateFrom, dateTo, saleType });
-    return NextResponse.json({ ok: true, result, progress: loadScrapeProgress() });
-  } catch (error) {
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : String(error),
-        progress: loadScrapeProgress(),
-      },
-      { status: 500 },
-    );
-  } finally {
-    scrapeRunning = false;
-  }
+  setScrapeRunning(true);
+
+  // Roda em background para o cliente poder fazer poll do log ao vivo (GET).
+  void (async () => {
+    try {
+      await runPapHistoricoScrape({ dateFrom, dateTo, saleType });
+    } catch {
+      // Erro já gravado em scrape-progress.logs
+    } finally {
+      setScrapeRunning(false);
+    }
+  })();
+
+  return NextResponse.json(
+    {
+      ok: true,
+      started: true,
+      progress: loadScrapeProgress(),
+    },
+    { status: 202 },
+  );
 }

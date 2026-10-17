@@ -66,6 +66,8 @@ export type ScrapeJobState =
 export type ScrapeProgress = {
   state: ScrapeJobState;
   message: string;
+  /** Linhas de log ao vivo (timestamp + passo). */
+  logs: string[];
   dateFrom: string;
   dateTo: string;
   saleType: string;
@@ -77,6 +79,7 @@ export type ScrapeProgress = {
   startedAt: string | null;
   finishedAt: string | null;
   lastLeadName: string | null;
+  currentUrl?: string | null;
 };
 
 export type SessionUser = {

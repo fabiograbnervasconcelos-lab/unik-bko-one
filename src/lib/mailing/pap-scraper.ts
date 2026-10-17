@@ -61,37 +61,118 @@ function parseBrDate(value: string) {
 function updateProgress(patch: Partial<ScrapeProgress>) {
   const current = loadScrapeProgress();
   const next = { ...current, ...patch };
+  if (!Array.isArray(next.logs)) next.logs = current.logs || [];
   saveScrapeProgress(next);
   return next;
 }
 
+function scrapeLog(line: string, patch: Partial<ScrapeProgress> = {}) {
+  const current = loadScrapeProgress();
+  const stamp = new Date().toLocaleTimeString("pt-BR", {
+    hour12: false,
+    timeZone: "America/Sao_Paulo",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const entry = `[${stamp}] ${line}`;
+  const logs = [...(current.logs || []), entry].slice(-300);
+  const next: ScrapeProgress = {
+    ...current,
+    ...patch,
+    message: line,
+    logs,
+  };
+  saveScrapeProgress(next);
+  return next;
+}
+
+function isOnPap(url: string) {
+  return /pap\.niointernet\.com\.br/i.test(url) && !/login\.microsoftonline|microsoft\.com\/login/i.test(url);
+}
+
 async function loginPap(page: Page, email: string, password: string) {
+  scrapeLog(`Abrindo PAP: ${PAP_HOME}`, { currentUrl: PAP_HOME });
   await page.goto(PAP_HOME, { waitUntil: "domcontentloaded", timeout: 90000 });
-  await page.waitForSelector("#i0116", { timeout: 30000 });
+  scrapeLog(`Página carregada: ${page.url()}`, { currentUrl: page.url() });
+
+  scrapeLog("Aguardando campo de e-mail Microsoft…");
+  await page.waitForSelector("#i0116", { timeout: 45000 });
   await humanPause(600, 1000);
+  scrapeLog(`Preenchendo e-mail: ${email}`);
   await page.fill("#i0116", email);
   await humanPause(350, 650);
+  scrapeLog("Clicando Avançar (e-mail)…");
   await page.click("#idSIButton9");
-  await page.waitForSelector("#i0118", { state: "visible", timeout: 30000 });
+
+  scrapeLog("Aguardando campo de senha…");
+  await page.waitForSelector("#i0118", { state: "visible", timeout: 45000 });
   await humanPause(800, 1300);
+  scrapeLog("Preenchendo senha…");
   await page.fill("#i0118", password);
   await humanPause(350, 650);
+  scrapeLog("Clicando Entrar (senha)…");
   await page.click("#idSIButton9");
-  await sleep(2500);
-  for (let i = 0; i < 5; i++) {
-    if (page.url().includes("pap.niointernet.com.br") && !page.url().includes("microsoft")) break;
-    if (await page.locator("#idSIButton9").count()) {
-      await page.click("#idSIButton9");
-      await sleep(3000);
-    } else {
-      await sleep(1500);
+  await sleep(2000);
+
+  // Não usar waitForURL(..., load): SPA Microsoft/PAP muitas vezes não dispara "load".
+  const deadline = Date.now() + 120_000;
+  let lastLoggedUrl = "";
+  while (Date.now() < deadline) {
+    const url = page.url();
+    if (url !== lastLoggedUrl) {
+      scrapeLog(`Login: URL = ${url}`, { currentUrl: url });
+      lastLoggedUrl = url;
     }
+
+    if (isOnPap(url)) {
+      scrapeLog("Login Microsoft OK — entrou no PAP.");
+      break;
+    }
+
+    const pwdError = page.locator("#passwordError, #usernameError, .alert-error, #errorText");
+    if (await pwdError.count()) {
+      const errText = ((await pwdError.first().innerText().catch(() => "")) || "").trim();
+      if (errText) throw new Error(`Login Microsoft recusado: ${errText}`);
+    }
+
+    // "Stay signed in?" / KMSI / Continuar
+    const kmsi = page.locator("#idSIButton9, #idBtn_Accept, input[type='submit']#idSIButton9");
+    if (await kmsi.count()) {
+      const visible = await kmsi.first().isVisible().catch(() => false);
+      if (visible) {
+        scrapeLog("Clicando Continuar / Manter conectado…");
+        await kmsi.first().click({ force: true }).catch(() => undefined);
+        await sleep(2500);
+        continue;
+      }
+    }
+
+    const yesBtn = page.getByRole("button", { name: /^(Yes|Sim|Continuar|Next|Avançar)$/i });
+    if (await yesBtn.count()) {
+      scrapeLog("Clicando botão de confirmação Microsoft…");
+      await yesBtn.first().click({ force: true }).catch(() => undefined);
+      await sleep(2000);
+      continue;
+    }
+
+    await sleep(1500);
   }
-  await page.waitForURL(/pap\.niointernet\.com\.br/, { timeout: 60000 });
-  await humanPause(1800, 2800);
+
+  if (!isOnPap(page.url())) {
+    throw new Error(
+      `Timeout no login PAP (sem waitUntil=load). URL final: ${page.url()}. Verifique senha/KMSI.`,
+    );
+  }
+
+  await humanPause(1500, 2500);
   if (!page.url().includes("/historico")) {
-    await page.goto(PAP_HISTORICO, { waitUntil: "domcontentloaded", timeout: 60000 });
+    scrapeLog(`Abrindo histório: ${PAP_HISTORICO}`);
+    await page.goto(PAP_HISTORICO, { waitUntil: "domcontentloaded", timeout: 90000 });
     await humanPause(2000, 3000);
+    scrapeLog(`Histório aberto: ${page.url()}`, { currentUrl: page.url() });
+  } else {
+    scrapeLog(`Já no histório: ${page.url()}`, { currentUrl: page.url() });
   }
 }
 
@@ -306,7 +387,8 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
   updateProgress({
     ...defaultScrapeProgress(),
     state: "running",
-    message: "Abrindo PAP e autenticando…",
+    message: "Iniciando busca no PAP…",
+    logs: [],
     dateFrom: options.dateFrom,
     dateTo: options.dateTo,
     saleType,
@@ -317,13 +399,18 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     processed: 0,
     imported: 0,
     skipped: 0,
+    currentUrl: null,
   });
+  scrapeLog(
+    `Job iniciado · Tipo=${tipoLabel} · Período ${options.dateFrom} → ${options.dateTo}`,
+  );
 
   let browser: Browser | null = null;
   const collected: MailingLead[] = [];
   const seenIds = new Set<string>();
 
   try {
+    scrapeLog("Abrindo Chromium (Playwright)…");
     browser = await launchBrowser();
     // Force Brazil timezone — PAP returns 400 with UTC (+00:00) offsets
     const brContext = await browser.newContext({
@@ -334,6 +421,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     });
     const page = await brContext.newPage();
+    scrapeLog("Browser pronto (timezone America/Sao_Paulo).");
 
     const pageBuckets: Array<Record<string, unknown>[]> = [];
     page.on("response", async (res) => {
@@ -346,62 +434,65 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         const vendas = json?.data?.vendas;
         if (Array.isArray(vendas) && vendas.length) {
           pageBuckets.push(vendas);
+          scrapeLog(`API vendas capturada: ${vendas.length} registro(s) nesta resposta.`);
         }
       } catch {
         // ignore parse errors
       }
     });
 
-    updateProgress({ message: "Login Microsoft / PAP…" });
     await loginPap(page, creds.email, creds.password);
 
-    updateProgress({ message: `Abrindo filtros (Tipo = ${tipoLabel})…` });
+    scrapeLog(`Abrindo filtros · Tipo = ${tipoLabel}`);
     await openFilters(page);
     await selectTipo(page, tipoLabel);
+    scrapeLog(`Tipo selecionado: ${tipoLabel}`);
 
     if (saleType === "venda") {
-      updateProgress({
-        message: `Status Primário = ${STATUS_PRIMARIO_VENDA}…`,
-      });
+      scrapeLog(`Selecionando Status Primário = ${STATUS_PRIMARIO_VENDA}`);
       await selectStatusPrimario(page, STATUS_PRIMARIO_VENDA);
+      scrapeLog("Status Primário OK (Aguardando tratamento).");
     }
 
-    updateProgress({
-      message: `Definindo período ${options.dateFrom} → ${options.dateTo}…`,
-    });
+    scrapeLog(`Definindo período ${options.dateFrom} → ${options.dateTo}`);
     const v1 = await pickCalendarDay(page, "De", from.day);
+    scrapeLog(`Data De = ${v1}`);
     const v2 = await pickCalendarDay(page, "Até", to.day);
+    scrapeLog(`Data Até = ${v2}`);
     if (!v1.includes(String(from.day)) || !v2.includes(String(to.day))) {
       throw new Error(`Falha ao definir datas (De=${v1}, Até=${v2}).`);
     }
 
-    updateProgress({ message: "Filtrando no PAP (aguarde)…" });
+    scrapeLog("Aplicando filtros no PAP (aguarde a lista)…");
     pageBuckets.length = 0;
     await applyFilter(page);
     await closeDrawer(page);
+    scrapeLog("Filtros aplicados · lendo lista (sem Avançar/Detalhar).");
 
     // Venda e Interesse: mailing sai da lista (/api/portal/vendas).
     // Não clicar em Detalhar / Avançar — dados já vêm na primeira página da lista.
     const maxPages = options.maxPages ?? 50;
     let pageNo = 1;
     while (pageNo <= maxPages) {
-      updateProgress({
-        page: pageNo,
-        message:
-          saleType === "venda"
-            ? `Lendo página ${pageNo} (Venda / Aguardando tratamento, sem Avançar)…`
-            : `Lendo página ${pageNo} de interesses…`,
-      });
+      scrapeLog(
+        saleType === "venda"
+          ? `Lendo página ${pageNo} (Venda / Aguardando tratamento)…`
+          : `Lendo página ${pageNo} de interesses…`,
+        { page: pageNo },
+      );
 
       // Wait a bit for response capture
       await sleep(1500);
       const latest = pageBuckets[pageBuckets.length - 1] || [];
+      scrapeLog(`Página ${pageNo}: ${latest.length} linha(s) na captura da API.`);
       for (const venda of latest) {
         const papId = String(venda._id || venda.numeroPedido || "");
         if (!papId || seenIds.has(papId)) continue;
         seenIds.add(papId);
 
         if (saleType === "venda" && !matchesVendaAguardandoTratamento(venda)) {
+          const st = String(venda.status || venda.chaveStatusPrimario || "");
+          scrapeLog(`Pulando (status ≠ Aguardando tratamento): ${st}`);
           updateProgress({
             skipped: loadScrapeProgress().skipped + 1,
             processed: loadScrapeProgress().processed + 1,
@@ -411,6 +502,9 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
 
         const draft = mapVendaToLead(venda, saleType);
         if (!draft.name || !draft.phone) {
+          scrapeLog(
+            `Sem nome/telefone — pulando pedido ${String(venda.numeroPedido || papId)}`,
+          );
           updateProgress({
             skipped: loadScrapeProgress().skipped + 1,
             processed: loadScrapeProgress().processed + 1,
@@ -424,13 +518,16 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
           });
           if (result.created) {
             collected.push(result.lead);
-            updateProgress({
-              imported: loadScrapeProgress().imported + 1,
-              processed: loadScrapeProgress().processed + 1,
-              lastLeadName: result.lead.name,
-            });
+            scrapeLog(
+              `Importado: ${result.lead.name} · ${result.lead.part1?.numeroPedido || ""} · ${result.lead.phone}`,
+              {
+                imported: loadScrapeProgress().imported + 1,
+                processed: loadScrapeProgress().processed + 1,
+                lastLeadName: result.lead.name,
+              },
+            );
           } else {
-            updateProgress({
+            scrapeLog(`Já existia: ${result.lead.name}`, {
               skipped: loadScrapeProgress().skipped + 1,
               processed: loadScrapeProgress().processed + 1,
               lastLeadName: result.lead.name,
@@ -442,17 +539,22 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         await humanPause(400, 900);
       }
 
+      scrapeLog(`Página ${pageNo} concluída · avançando paginação…`);
       const moved = await gotoNextResultsPage(page);
-      if (!moved) break;
+      if (!moved) {
+        scrapeLog("Fim da paginação.");
+        break;
+      }
       pageNo += 1;
-      // clear bucket marker by pushing empty sentinel awareness — next response appends
     }
 
-    updateProgress({
-      state: "done",
-      message: `Concluído: ${loadScrapeProgress().imported} importados, ${loadScrapeProgress().skipped} já existiam.`,
-      finishedAt: new Date().toISOString(),
-    });
+    scrapeLog(
+      `Concluído: ${loadScrapeProgress().imported} importados, ${loadScrapeProgress().skipped} já existiam/pulados.`,
+      {
+        state: "done",
+        finishedAt: new Date().toISOString(),
+      },
+    );
 
     await brContext.close();
     return {
@@ -464,9 +566,8 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const current = loadScrapeProgress();
-    updateProgress({
+    scrapeLog(`ERRO: ${message}`, {
       state: "error",
-      message,
       finishedAt: new Date().toISOString(),
       errors: [...current.errors, message].slice(-20),
     });

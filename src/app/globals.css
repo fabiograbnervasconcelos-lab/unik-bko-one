@@ -213,6 +213,21 @@
   vertical-align: top;
 }
 
+.mailing-log {
+  max-height: 280px;
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.45);
+  padding: 0.85rem 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #b8e0ff;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .mailing-link-btn {
   display: inline-flex;
   align-items: center;
