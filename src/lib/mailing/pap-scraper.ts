@@ -364,11 +364,121 @@ async function selectStatusPrimario(page: Page, label: string) {
 
 async function readOpenCalendarMonthYear(page: Page) {
   const header = page.locator(
-    ".MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-switchHeader p",
+    ".MuiPopover-paper .MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-switchHeader p",
   );
   if (!(await header.count())) return null;
   const text = (await header.first().innerText().catch(() => "")) || "";
   return parsePtMonthYear(text);
+}
+
+const DATE_DAY_SELECTOR =
+  ".MuiPopover-paper button.MuiPickersDay-day:not(.MuiPickersDay-hidden), .MuiPickersBasePicker-container button.MuiPickersDay-day:not(.MuiPickersDay-hidden)";
+
+async function ensureFiltersOpen(page: Page) {
+  const drawer = page.locator(".MuiDrawer-paper");
+  if (await drawer.isVisible().catch(() => false)) return;
+  scrapeLog("Drawer de filtros fechou — reabrindo…");
+  await openFilters(page);
+}
+
+/** Fecha só o popover do DatePicker. NÃO usa Escape no escuro — isso fecha o drawer. */
+async function closeAnyDatePopover(page: Page) {
+  const openDays = page.locator(DATE_DAY_SELECTOR);
+  if (!(await openDays.count())) return;
+  // Backdrop transparente do MUI Popover
+  const backdrop = page.locator(".MuiPopover-root > div[aria-hidden='true'], .MuiBackdrop-root").first();
+  if (await backdrop.count()) {
+    await backdrop.click({ force: true }).catch(() => undefined);
+    await sleep(250);
+  }
+  if (await openDays.first().isVisible().catch(() => false)) {
+    // Escape só com popover aberto (fecha o picker, não o drawer)
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await sleep(250);
+  }
+  await ensureFiltersOpen(page);
+}
+
+async function openDatePopover(page: Page, root: ReturnType<Page["locator"]>) {
+  await ensureFiltersOpen(page);
+  await closeAnyDatePopover(page);
+  await root.scrollIntoViewIfNeeded().catch(() => undefined);
+
+  const calendarBtn = root.locator(".MuiInputAdornment-root button").first();
+  const strategies: Array<() => Promise<void>> = [
+    async () => {
+      await calendarBtn.click({ force: true });
+    },
+    async () => {
+      await root.locator("input").first().click({ force: true });
+      await humanPause(200, 350);
+      await calendarBtn.click({ force: true });
+    },
+    async () => {
+      // Clique no SVG do calendário
+      await root.locator(".MuiInputAdornment-root svg").first().click({ force: true });
+    },
+  ];
+
+  let lastErr: unknown;
+  for (let i = 0; i < strategies.length; i++) {
+    try {
+      await ensureFiltersOpen(page);
+      await strategies[i]!();
+      await page.waitForSelector(DATE_DAY_SELECTOR, { state: "visible", timeout: 6000 });
+      await humanPause(350, 600);
+      return;
+    } catch (err) {
+      lastErr = err;
+      scrapeLog(`Calendário: abertura tentativa ${i + 1}/${strategies.length} falhou — retry…`);
+      await closeAnyDatePopover(page);
+      await humanPause(200, 400);
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("Não foi possível abrir o calendário do DatePicker.");
+}
+
+async function setDateByTyping(
+  page: Page,
+  root: ReturnType<Page["locator"]>,
+  expected: string,
+) {
+  await ensureFiltersOpen(page);
+  await closeAnyDatePopover(page);
+  const input = root.locator("input").first();
+  await input.scrollIntoViewIfNeeded().catch(() => undefined);
+  await input.click({ force: true });
+  await humanPause(200, 400);
+  // KeyboardDatePicker do MUI v4: setter nativo + eventos React
+  await input.evaluate((el, v) => {
+    const node = el as HTMLInputElement;
+    node.focus();
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    setter?.call(node, "");
+    node.dispatchEvent(new Event("input", { bubbles: true }));
+    setter?.call(node, v);
+    node.dispatchEvent(new Event("input", { bubbles: true }));
+    node.dispatchEvent(new Event("change", { bubbles: true }));
+    node.blur();
+  }, expected);
+  await humanPause(400, 700);
+  let value = (await input.inputValue()).trim();
+  if (value === expected) return value;
+
+  // Fallback: digitar caractere a caractere (máscara dd/mm/yyyy)
+  await input.click({ force: true });
+  await page.keyboard.press("Control+a");
+  await sleep(80);
+  await page.keyboard.press("Backspace");
+  await sleep(100);
+  await input.pressSequentially(expected, { delay: 45 });
+  await page.keyboard.press("Tab");
+  await humanPause(500, 800);
+  value = (await input.inputValue()).trim();
+  await ensureFiltersOpen(page);
+  return value;
 }
 
 /**
@@ -381,81 +491,84 @@ async function pickCalendarDate(
   parts: { day: number; month: number; year: number },
 ) {
   const expected = formatBrDate(parts);
+  await ensureFiltersOpen(page);
   const root = page
     .locator(".MuiDrawer-paper .MuiTextField-root")
     .filter({ has: page.locator(`label:text-is("${label}")`) });
-
-  // 1) Tenta digitar a data completa no input (mais fiel ao que o usuário colocou)
   const input = root.locator("input").first();
-  await input.click({ force: true });
-  await humanPause(200, 400);
-  await input.fill("");
-  await input.pressSequentially(expected, { delay: 35 });
-  await page.keyboard.press("Tab");
-  await humanPause(500, 800);
-  let value = await input.inputValue();
-  if (value.trim() === expected) {
-    scrapeLog(`Campo ${label} digitado: ${value}`);
-    return value;
+
+  // 1) Digitar primeiro (sem Escape cego — senão o drawer fecha)
+  scrapeLog(`Definindo ${label} = ${expected}…`);
+  const typed = await setDateByTyping(page, root, expected);
+  if (typed === expected) {
+    scrapeLog(`Campo ${label} digitado: ${typed}`);
+    return typed;
   }
+  scrapeLog(
+    `Campo ${label} não aceitou digitação (${typed || "vazio"}) — usando calendário…`,
+  );
 
   // 2) Fallback: calendário com navegação de mês/ano
-  scrapeLog(
-    `Campo ${label} não aceitou digitação (${value || "vazio"}) — usando calendário até ${expected}…`,
-  );
-  await root.locator("button").first().click({ force: true });
-  await page.waitForSelector("button.MuiPickersDay-day:not(.MuiPickersDay-hidden)", {
-    timeout: 10000,
-  });
-  await humanPause(400, 700);
+  try {
+    await openDatePopover(page, root);
 
-  const targetIndex = parts.year * 12 + (parts.month - 1);
-  for (let i = 0; i < 36; i++) {
-    assertNotCancelled();
-    const current = await readOpenCalendarMonthYear(page);
-    if (!current) break;
-    const currentIndex = current.year * 12 + (current.month - 1);
-    if (currentIndex === targetIndex) break;
+    const targetIndex = parts.year * 12 + (parts.month - 1);
+    for (let i = 0; i < 36; i++) {
+      assertNotCancelled();
+      const current = await readOpenCalendarMonthYear(page);
+      if (!current) break;
+      const currentIndex = current.year * 12 + (current.month - 1);
+      if (currentIndex === targetIndex) break;
 
-    const buttons = page.locator(
-      ".MuiPickersCalendarHeader-switchHeader button.MuiPickersCalendarHeader-iconButton",
-    );
-    const goPrev = currentIndex > targetIndex;
-    const btn = goPrev ? buttons.first() : buttons.nth(1);
-    if (await btn.isDisabled().catch(() => true)) {
+      const buttons = page.locator(
+        ".MuiPopover-paper .MuiPickersCalendarHeader-switchHeader button.MuiPickersCalendarHeader-iconButton, .MuiPickersCalendarHeader-switchHeader button.MuiPickersCalendarHeader-iconButton",
+      );
+      const goPrev = currentIndex > targetIndex;
+      const btn = goPrev ? buttons.first() : buttons.nth(1);
+      if (await btn.isDisabled().catch(() => true)) {
+        throw new Error(
+          `Calendário ${label}: não foi possível navegar até ${expected} (mês aberto: ${current.month}/${current.year}).`,
+        );
+      }
+      scrapeLog(
+        `Calendário ${label}: ${MONTHS_PT[current.month - 1]} ${current.year} → ${goPrev ? "mês anterior" : "próximo mês"}`,
+      );
+      await btn.click({ force: true });
+      await humanPause(350, 600);
+    }
+
+    const opened = await readOpenCalendarMonthYear(page);
+    if (!opened || opened.month !== parts.month || opened.year !== parts.year) {
       throw new Error(
-        `Calendário ${label}: não foi possível navegar até ${expected} (mês aberto: ${current.month}/${current.year}).`,
+        `Calendário ${label}: esperado ${parts.month}/${parts.year}, aberto ${opened?.month || "?"}/${opened?.year || "?"}.`,
       );
     }
-    scrapeLog(
-      `Calendário ${label}: ${MONTHS_PT[current.month - 1]} ${current.year} → ${goPrev ? "mês anterior" : "próximo mês"}`,
-    );
-    await btn.click({ force: true });
-    await humanPause(350, 600);
-  }
 
-  const opened = await readOpenCalendarMonthYear(page);
-  if (!opened || opened.month !== parts.month || opened.year !== parts.year) {
+    await page
+      .locator(
+        ".MuiPopover-paper button.MuiPickersDay-day:not(.MuiPickersDay-hidden):not(.MuiPickersDay-dayDisabled)",
+      )
+      .filter({ hasText: new RegExp(`^${parts.day}$`) })
+      .first()
+      .click({ force: true });
+    await humanPause(800, 1300);
+    await ensureFiltersOpen(page);
+
+    const value = (await input.inputValue()).trim();
+    if (value === expected) {
+      scrapeLog(`Campo ${label} confirmado no calendário: ${value}`);
+      return value;
+    }
+    scrapeLog(`Calendário ${label} deixou valor "${value || "vazio"}" (esperado ${expected}).`);
     throw new Error(
-      `Calendário ${label}: esperado ${parts.month}/${parts.year}, aberto ${opened?.month || "?"}/${opened?.year || "?"}.`,
+      `Data ${label} divergente: esperado ${expected}, campo ficou ${value || "(vazio)"}.`,
     );
+  } catch (err) {
+    await closeAnyDatePopover(page);
+    throw err instanceof Error
+      ? err
+      : new Error(`Data ${label} não aplicada. Esperado ${expected}.`);
   }
-
-  await page
-    .locator("button.MuiPickersDay-day:not(.MuiPickersDay-hidden):not(.MuiPickersDay-dayDisabled)")
-    .filter({ hasText: new RegExp(`^${parts.day}$`) })
-    .first()
-    .click({ force: true });
-  await humanPause(800, 1300);
-
-  value = await input.inputValue();
-  if (value.trim() !== expected) {
-    throw new Error(
-      `Data ${label} divergente: digitado/esperado ${expected}, campo ficou ${value || "(vazio)"}.`,
-    );
-  }
-  scrapeLog(`Campo ${label} confirmado no calendário: ${value}`);
-  return value;
 }
 
 async function applyFilter(page: Page) {
