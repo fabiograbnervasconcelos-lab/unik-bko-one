@@ -17,12 +17,32 @@ import type { LeadPartData, MailingLead, ScrapeProgress } from "@/lib/mailing/ty
 const PAP_HOME = "https://pap.niointernet.com.br/";
 const PAP_HISTORICO = "https://pap.niointernet.com.br/administrativo/historico";
 
+export type PapSaleType = "interesse" | "venda";
+
 export type PapScrapeOptions = {
   dateFrom: string; // dd/mm/yyyy
   dateTo: string; // dd/mm/yyyy
-  saleType?: string; // Interesse
+  /** Interesse = regra atual; Venda = só AGUARDANDO TRATAMENTO, dados da lista (sem Avançar). */
+  saleType?: PapSaleType | string;
   maxPages?: number;
 };
+
+const STATUS_PRIMARIO_VENDA = "Aguardando tratamento";
+const STATUS_PRIMARIO_VENDA_KEY = "ANALISE_BO";
+
+export function normalizeSaleType(value?: string | null): PapSaleType {
+  const raw = String(value || "interesse").trim().toLowerCase();
+  if (raw === "venda" || raw === "sale" || raw === "vendas") return "venda";
+  return "interesse";
+}
+
+/** Venda: apenas status primário Aguardando tratamento (ANALISE_BO). */
+export function matchesVendaAguardandoTratamento(venda: Record<string, unknown>): boolean {
+  const primary = String(venda.chaveStatusPrimario || "").toUpperCase();
+  if (primary === STATUS_PRIMARIO_VENDA_KEY) return true;
+  const status = String(venda.status || venda.subStatus || "");
+  return /aguardando\s*tratamento/i.test(status);
+}
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -81,17 +101,48 @@ async function openFilters(page: Page) {
   await humanPause(700, 1200);
 }
 
-async function selectTipoInteresse(page: Page) {
+async function selectTipo(page: Page, tipoLabel: "Interesse" | "Venda") {
   await page
     .locator(".MuiDrawer-paper .filter-select-pdv div[class*='-control']")
     .first()
     .click({ force: true });
   await humanPause(700, 1100);
-  await page.getByText("Interesse", { exact: true }).click({ force: true });
+  await page.getByText(tipoLabel, { exact: true }).click({ force: true });
   await humanPause(1200, 1800);
   const text = await page.locator(".MuiDrawer-paper").innerText();
-  if (!/interesse/i.test(text)) {
-    throw new Error("Não foi possível selecionar Tipo = Interesse.");
+  const ok =
+    tipoLabel === "Interesse" ? /interesse/i.test(text) : /\bvenda\b/i.test(text);
+  if (!ok) {
+    throw new Error(`Não foi possível selecionar Tipo = ${tipoLabel}.`);
+  }
+}
+
+/** Status Primário (2º react-select do drawer; não usa filter-select-pdv). */
+async function selectStatusPrimario(page: Page, label: string) {
+  const drawer = page.locator(".MuiDrawer-paper");
+  // Controles: 0=Tipo, 1=Status Primário, 2=Status Secundário
+  const controls = drawer.locator("div[class*='-control']");
+  const count = await controls.count();
+  if (count < 2) {
+    throw new Error("Filtro Status Primário não encontrado no drawer.");
+  }
+  await controls.nth(1).click({ force: true });
+  await humanPause(700, 1100);
+  const menuOpt = page
+    .locator("div[id*='react-select'][id*='option'], div[class*='-option']")
+    .filter({ hasText: new RegExp(`^${label}$`, "i") })
+    .first();
+  if (await menuOpt.count()) {
+    await menuOpt.click({ force: true });
+  } else {
+    await page.keyboard.type(label, { delay: 40 });
+    await humanPause(500, 800);
+    await page.keyboard.press("Enter");
+  }
+  await humanPause(1200, 1800);
+  const text = await drawer.innerText();
+  if (!new RegExp(label.replace(/\s+/g, "\\s+"), "i").test(text)) {
+    throw new Error(`Não foi possível selecionar Status Primário = ${label}.`);
   }
 }
 
@@ -134,7 +185,10 @@ async function closeDrawer(page: Page) {
   await humanPause(900, 1400);
 }
 
-function mapVendaToLead(venda: Record<string, unknown>): Omit<MailingLead, "id" | "createdAt" | "updatedAt"> {
+function mapVendaToLead(
+  venda: Record<string, unknown>,
+  saleType: PapSaleType,
+): Omit<MailingLead, "id" | "createdAt" | "updatedAt"> {
   const dados = (venda.dadosCliente || {}) as Record<string, unknown>;
   const contatos = Array.isArray(dados.contatos) ? (dados.contatos as Array<Record<string, unknown>>) : [];
   const phoneRaw = String(contatos[0]?.telefone || contatos[0]?.numero || "");
@@ -155,6 +209,8 @@ function mapVendaToLead(venda: Record<string, unknown>): Omit<MailingLead, "id" 
     segmento: String(venda.segmento || ""),
     numeroPedido: String(venda.numeroPedido || ""),
     status: String(venda.subStatus || venda.status || ""),
+    statusPrimario: String(venda.status || venda.chaveStatusPrimario || ""),
+    statusSecundario: String(venda.chaveStatusSecundario || ""),
     motivo: String(venda.motivo || ""),
     etapa: String(venda.etapaInteresse || ""),
     dataCriacao: String(venda.dataCriacao || ""),
@@ -196,7 +252,7 @@ function mapVendaToLead(venda: Record<string, unknown>): Omit<MailingLead, "id" 
     state: part2.uf || undefined,
     zip: part2.cep || undefined,
     plan: planData.plano || undefined,
-    saleType: "interesse",
+    saleType,
     saleDate: part1.dataCriacao || undefined,
     papId: String(venda._id || venda.numeroPedido || ""),
     part1,
@@ -239,6 +295,9 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     throw new Error("Datas inválidas. Use dd/mm/aaaa.");
   }
 
+  const saleType = normalizeSaleType(options.saleType);
+  const tipoLabel: "Interesse" | "Venda" = saleType === "venda" ? "Venda" : "Interesse";
+
   const creds = loadPapCredentials();
   if (!creds.email || !creds.password) {
     throw new Error("Credenciais do PAP não configuradas.");
@@ -250,7 +309,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     message: "Abrindo PAP e autenticando…",
     dateFrom: options.dateFrom,
     dateTo: options.dateTo,
-    saleType: options.saleType || "interesse",
+    saleType,
     startedAt: new Date().toISOString(),
     finishedAt: null,
     errors: [],
@@ -296,9 +355,16 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     updateProgress({ message: "Login Microsoft / PAP…" });
     await loginPap(page, creds.email, creds.password);
 
-    updateProgress({ message: "Abrindo filtros (Tipo = Interesse)…" });
+    updateProgress({ message: `Abrindo filtros (Tipo = ${tipoLabel})…` });
     await openFilters(page);
-    await selectTipoInteresse(page);
+    await selectTipo(page, tipoLabel);
+
+    if (saleType === "venda") {
+      updateProgress({
+        message: `Status Primário = ${STATUS_PRIMARIO_VENDA}…`,
+      });
+      await selectStatusPrimario(page, STATUS_PRIMARIO_VENDA);
+    }
 
     updateProgress({
       message: `Definindo período ${options.dateFrom} → ${options.dateTo}…`,
@@ -314,12 +380,17 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     await applyFilter(page);
     await closeDrawer(page);
 
+    // Venda e Interesse: mailing sai da lista (/api/portal/vendas).
+    // Não clicar em Detalhar / Avançar — dados já vêm na primeira página da lista.
     const maxPages = options.maxPages ?? 50;
     let pageNo = 1;
     while (pageNo <= maxPages) {
       updateProgress({
         page: pageNo,
-        message: `Lendo página ${pageNo} de resultados…`,
+        message:
+          saleType === "venda"
+            ? `Lendo página ${pageNo} (Venda / Aguardando tratamento, sem Avançar)…`
+            : `Lendo página ${pageNo} de interesses…`,
       });
 
       // Wait a bit for response capture
@@ -329,7 +400,16 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         const papId = String(venda._id || venda.numeroPedido || "");
         if (!papId || seenIds.has(papId)) continue;
         seenIds.add(papId);
-        const draft = mapVendaToLead(venda);
+
+        if (saleType === "venda" && !matchesVendaAguardandoTratamento(venda)) {
+          updateProgress({
+            skipped: loadScrapeProgress().skipped + 1,
+            processed: loadScrapeProgress().processed + 1,
+          });
+          continue;
+        }
+
+        const draft = mapVendaToLead(venda, saleType);
         if (!draft.name || !draft.phone) {
           updateProgress({
             skipped: loadScrapeProgress().skipped + 1,

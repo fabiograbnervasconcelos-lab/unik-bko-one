@@ -24,6 +24,8 @@ type Lead = {
   city?: string;
   queue: "transferir" | "tratando" | "sem_interesse" | "vendido";
   source: string;
+  saleType?: string;
+  papId?: string;
   assignedTo?: string | null;
   treatingSince?: string | null;
   saleDate?: string;
@@ -59,6 +61,7 @@ export function MailingPanel() {
   const [message, setMessage] = useState("");
   const [dateFrom, setDateFrom] = useState("16/10/2026");
   const [dateTo, setDateTo] = useState("16/10/2026");
+  const [saleType, setSaleType] = useState<"interesse" | "venda">("interesse");
   const [papEmail, setPapEmail] = useState("");
   const [papPassword, setPapPassword] = useState("");
   const [scrapeMsg, setScrapeMsg] = useState("");
@@ -108,6 +111,9 @@ export function MailingPanel() {
     const data = await res.json();
     if (data.defaults?.dateFrom) setDateFrom(data.defaults.dateFrom);
     if (data.defaults?.dateTo) setDateTo(data.defaults.dateTo);
+    if (data.defaults?.saleType === "venda" || data.defaults?.saleType === "interesse") {
+      setSaleType(data.defaults.saleType);
+    }
     if (data.papUser) setPapEmail(data.papUser);
     if (data.progress?.message) setScrapeMsg(data.progress.message);
   }
@@ -200,6 +206,7 @@ export function MailingPanel() {
         body: JSON.stringify({
           dateFrom,
           dateTo,
+          saleType,
           papEmail: papEmail || undefined,
           papPassword: papPassword || undefined,
         }),
@@ -356,12 +363,35 @@ export function MailingPanel() {
 
         {isManager ? (
           <section className="mailing-panel space-y-4 p-5">
-            <h2 className="mailing-title text-lg">Buscar interesses no PAP</h2>
+            <h2 className="mailing-title text-lg">Buscar no PAP</h2>
             <p className="text-sm text-white/65">
-              Tipo = Interesse. Período editável (exemplo: 16/10/2026 até 16/10/2026). A busca
-              navega o PAP como humano, página a página.
+              Escolha Tipo (Interesse ou Venda) e o período. Em Venda, só entra status{" "}
+              <strong className="font-medium text-white/85">Aguardando tratamento</strong> — dados
+              saem da lista (sem clicar em Avançar). Interesse segue a regra atual.
             </p>
             <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="saleType">Tipo</Label>
+                <select
+                  id="saleType"
+                  className="mailing-select"
+                  value={saleType}
+                  onChange={(e) =>
+                    setSaleType(e.target.value === "venda" ? "venda" : "interesse")
+                  }
+                >
+                  <option value="interesse">Interesse</option>
+                  <option value="venda">Venda</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label>Regra do status</Label>
+                <p className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70">
+                  {saleType === "venda"
+                    ? "Só AGUARDANDO TRATAMENTO · sem Avançar/Detalhar"
+                    : "Interesse (Minhas Pendências) · regra existente"}
+                </p>
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="dateFrom">De (dd/mm/aaaa)</Label>
                 <Input
