@@ -1,7 +1,7 @@
 FROM node:20-bookworm
 
-# Rebuild marker: UI WhatsApp CRM vs CRM×GED via APP_MODE.
-ARG BUILD_STAMP=venda8-lancado-fix-20261002
+# Rebuild marker: UI WhatsApp CRM / CRM×GED / mailing PAP via APP_MODE.
+ARG BUILD_STAMP=mailing-pap-20261017
 LABEL unik.bko.build="${BUILD_STAMP}"
 
 WORKDIR /app

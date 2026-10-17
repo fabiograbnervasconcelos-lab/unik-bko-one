@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { isWhatsAppCrmMode } from "@/lib/app-mode";
+import { getAppMode, isWhatsAppCrmMode } from "@/lib/app-mode";
 
 export const dynamic = "force-dynamic";
 
@@ -27,9 +27,11 @@ export async function GET() {
       ok: true,
       ts: Date.now(),
       gitSha: sha.slice(0, 12),
-      buildId: "venda8-lancado-fix-20261002",
+      buildId: "mailing-pap-20261017",
+      appMode: getAppMode(),
       features: {
         vendorBot,
+        mailing: true,
         faturaOpcao6: true,
         vendaOpcao8: true,
         faturaRoboUrl:
