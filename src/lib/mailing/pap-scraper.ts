@@ -94,6 +94,45 @@ function parseBrDate(value: string) {
   return { day: Number(m[1]), month: Number(m[2]), year: Number(m[3]) };
 }
 
+function formatBrDate(parts: { day: number; month: number; year: number }) {
+  const dd = String(parts.day).padStart(2, "0");
+  const mm = String(parts.month).padStart(2, "0");
+  return `${dd}/${mm}/${parts.year}`;
+}
+
+const MONTHS_PT = [
+  "janeiro",
+  "fevereiro",
+  "março",
+  "abril",
+  "maio",
+  "junho",
+  "julho",
+  "agosto",
+  "setembro",
+  "outubro",
+  "novembro",
+  "dezembro",
+] as const;
+
+function parsePtMonthYear(text: string): { month: number; year: number } | null {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  const m = normalized.match(
+    /(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+(\d{4})/,
+  );
+  if (!m) return null;
+  const names = MONTHS_PT.map((n) => n.normalize("NFD").replace(/\p{M}/gu, ""));
+  const month = names.indexOf(m[1]!) + 1;
+  const year = Number(m[2]);
+  if (month < 1 || !year) return null;
+  return { month, year };
+}
+
 function updateProgress(patch: Partial<ScrapeProgress>) {
   const current = loadScrapeProgress();
   const next = { ...current, ...patch };
@@ -323,22 +362,100 @@ async function selectStatusPrimario(page: Page, label: string) {
   }
 }
 
-async function pickCalendarDay(page: Page, label: "De" | "Até", day: number) {
+async function readOpenCalendarMonthYear(page: Page) {
+  const header = page.locator(
+    ".MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-switchHeader p",
+  );
+  if (!(await header.count())) return null;
+  const text = (await header.first().innerText().catch(() => "")) || "";
+  return parsePtMonthYear(text);
+}
+
+/**
+ * Seleciona data completa no MUI DatePicker do drawer (não só o dia do mês aberto).
+ * Ex.: 17/09/2026 navega até setembro/2026 e só então clica o dia 17.
+ */
+async function pickCalendarDate(
+  page: Page,
+  label: "De" | "Até",
+  parts: { day: number; month: number; year: number },
+) {
+  const expected = formatBrDate(parts);
   const root = page
     .locator(".MuiDrawer-paper .MuiTextField-root")
     .filter({ has: page.locator(`label:text-is("${label}")`) });
+
+  // 1) Tenta digitar a data completa no input (mais fiel ao que o usuário colocou)
+  const input = root.locator("input").first();
+  await input.click({ force: true });
+  await humanPause(200, 400);
+  await input.fill("");
+  await input.pressSequentially(expected, { delay: 35 });
+  await page.keyboard.press("Tab");
+  await humanPause(500, 800);
+  let value = await input.inputValue();
+  if (value.trim() === expected) {
+    scrapeLog(`Campo ${label} digitado: ${value}`);
+    return value;
+  }
+
+  // 2) Fallback: calendário com navegação de mês/ano
+  scrapeLog(
+    `Campo ${label} não aceitou digitação (${value || "vazio"}) — usando calendário até ${expected}…`,
+  );
   await root.locator("button").first().click({ force: true });
   await page.waitForSelector("button.MuiPickersDay-day:not(.MuiPickersDay-hidden)", {
     timeout: 10000,
   });
-  await humanPause(500, 900);
+  await humanPause(400, 700);
+
+  const targetIndex = parts.year * 12 + (parts.month - 1);
+  for (let i = 0; i < 36; i++) {
+    assertNotCancelled();
+    const current = await readOpenCalendarMonthYear(page);
+    if (!current) break;
+    const currentIndex = current.year * 12 + (current.month - 1);
+    if (currentIndex === targetIndex) break;
+
+    const buttons = page.locator(
+      ".MuiPickersCalendarHeader-switchHeader button.MuiPickersCalendarHeader-iconButton",
+    );
+    const goPrev = currentIndex > targetIndex;
+    const btn = goPrev ? buttons.first() : buttons.nth(1);
+    if (await btn.isDisabled().catch(() => true)) {
+      throw new Error(
+        `Calendário ${label}: não foi possível navegar até ${expected} (mês aberto: ${current.month}/${current.year}).`,
+      );
+    }
+    scrapeLog(
+      `Calendário ${label}: ${MONTHS_PT[current.month - 1]} ${current.year} → ${goPrev ? "mês anterior" : "próximo mês"}`,
+    );
+    await btn.click({ force: true });
+    await humanPause(350, 600);
+  }
+
+  const opened = await readOpenCalendarMonthYear(page);
+  if (!opened || opened.month !== parts.month || opened.year !== parts.year) {
+    throw new Error(
+      `Calendário ${label}: esperado ${parts.month}/${parts.year}, aberto ${opened?.month || "?"}/${opened?.year || "?"}.`,
+    );
+  }
+
   await page
     .locator("button.MuiPickersDay-day:not(.MuiPickersDay-hidden):not(.MuiPickersDay-dayDisabled)")
-    .filter({ hasText: new RegExp(`^${day}$`) })
+    .filter({ hasText: new RegExp(`^${parts.day}$`) })
     .first()
     .click({ force: true });
   await humanPause(800, 1300);
-  return root.locator("input").inputValue();
+
+  value = await input.inputValue();
+  if (value.trim() !== expected) {
+    throw new Error(
+      `Data ${label} divergente: digitado/esperado ${expected}, campo ficou ${value || "(vazio)"}.`,
+    );
+  }
+  scrapeLog(`Campo ${label} confirmado no calendário: ${value}`);
+  return value;
 }
 
 async function applyFilter(page: Page) {
@@ -565,16 +682,18 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     }
 
     assertNotCancelled();
-    scrapeLog(`Definindo período ${options.dateFrom} → ${options.dateTo}`);
-    const v1 = await pickCalendarDay(page, "De", from.day);
+    scrapeLog(`Definindo período exatamente como na tela: ${options.dateFrom} → ${options.dateTo}`);
+    const v1 = await pickCalendarDate(page, "De", from);
     scrapeLog(`Data De = ${v1}`);
     await captureLiveShot(page, "data-de");
     assertNotCancelled();
-    const v2 = await pickCalendarDay(page, "Até", to.day);
+    const v2 = await pickCalendarDate(page, "Até", to);
     scrapeLog(`Data Até = ${v2}`);
     await captureLiveShot(page, "data-ate");
-    if (!v1.includes(String(from.day)) || !v2.includes(String(to.day))) {
-      throw new Error(`Falha ao definir datas (De=${v1}, Até=${v2}).`);
+    if (v1.trim() !== options.dateFrom.trim() || v2.trim() !== options.dateTo.trim()) {
+      throw new Error(
+        `Datas não bateram com o formulário (pedido ${options.dateFrom}→${options.dateTo}, PAP De=${v1}, Até=${v2}).`,
+      );
     }
 
     assertNotCancelled();
