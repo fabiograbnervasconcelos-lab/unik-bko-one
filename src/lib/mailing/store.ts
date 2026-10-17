@@ -165,6 +165,8 @@ export function defaultScrapeProgress(): ScrapeProgress {
     finishedAt: null,
     lastLeadName: null,
     currentUrl: null,
+    liveShotLabel: null,
+    liveShotAt: null,
   };
 }
 

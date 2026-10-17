@@ -214,7 +214,7 @@
 }
 
 .mailing-log {
-  max-height: 280px;
+  max-height: 420px;
   overflow: auto;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -226,6 +226,36 @@
   color: #b8e0ff;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.mailing-live-frame {
+  position: relative;
+  min-height: 280px;
+  max-height: 420px;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.mailing-live-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  object-position: top center;
+  background: #0b1220;
+}
+
+.mailing-live-empty {
+  display: grid;
+  place-items: center;
+  min-height: 280px;
+  padding: 1.5rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.875rem;
 }
 
 .mailing-link-btn {

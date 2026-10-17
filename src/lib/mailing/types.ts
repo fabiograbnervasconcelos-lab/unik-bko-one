@@ -80,6 +80,10 @@ export type ScrapeProgress = {
   finishedAt: string | null;
   lastLeadName: string | null;
   currentUrl?: string | null;
+  /** Rótulo do último print ao vivo (ex.: login-senha). */
+  liveShotLabel?: string | null;
+  /** ISO timestamp do último print — UI usa como cache-bust. */
+  liveShotAt?: string | null;
 };
 
 export type SessionUser = {

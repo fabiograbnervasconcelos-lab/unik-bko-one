@@ -68,6 +68,9 @@ export function MailingPanel() {
   const [scrapeLogs, setScrapeLogs] = useState<string[]>([]);
   const [scrapeRunning, setScrapeRunning] = useState(false);
   const [scrapeState, setScrapeState] = useState<string>("idle");
+  const [liveShotAt, setLiveShotAt] = useState<string | null>(null);
+  const [liveShotLabel, setLiveShotLabel] = useState<string | null>(null);
+  const [liveShotUrl, setLiveShotUrl] = useState<string | null>(null);
   const logBoxRef = useRef<HTMLPreElement | null>(null);
   const [manual, setManual] = useState({ name: "", phone: "", document: "", notes: "" });
   const [newUser, setNewUser] = useState({
@@ -122,6 +125,11 @@ export function MailingPanel() {
     if (data.progress?.message) setScrapeMsg(data.progress.message);
     if (Array.isArray(data.progress?.logs)) setScrapeLogs(data.progress.logs);
     if (data.progress?.state) setScrapeState(data.progress.state);
+    if (data.progress?.liveShotAt) {
+      setLiveShotAt(data.progress.liveShotAt);
+      setLiveShotLabel(data.progress.liveShotLabel || null);
+      setLiveShotUrl(`/api/mailing/live-shot?t=${encodeURIComponent(data.progress.liveShotAt)}`);
+    }
     if (data.running) setScrapeRunning(true);
   }
 
@@ -154,6 +162,11 @@ export function MailingPanel() {
         if (Array.isArray(data.progress?.logs)) setScrapeLogs(data.progress.logs);
         if (data.progress?.message) setScrapeMsg(data.progress.message);
         if (data.progress?.state) setScrapeState(data.progress.state);
+        if (data.progress?.liveShotAt) {
+          setLiveShotAt(data.progress.liveShotAt);
+          setLiveShotLabel(data.progress.liveShotLabel || null);
+          setLiveShotUrl(`/api/mailing/live-shot?t=${encodeURIComponent(data.progress.liveShotAt)}`);
+        }
         const stillRunning = Boolean(data.running) || data.progress?.state === "running";
         if (!stillRunning) {
           setScrapeRunning(false);
@@ -167,7 +180,7 @@ export function MailingPanel() {
       }
     };
     void tick();
-    const id = window.setInterval(() => void tick(), 1200);
+    const id = window.setInterval(() => void tick(), 900);
     return () => {
       cancelled = true;
       window.clearInterval(id);
@@ -530,13 +543,40 @@ export function MailingPanel() {
               interromper e depois <strong>Buscar no PAP</strong> de novo.
             </p>
             {scrapeMsg ? <p className="text-sm text-sky-200">{scrapeMsg}</p> : null}
-            <div className="space-y-2">
-              <Label>Log ao vivo do acesso PAP</Label>
-              <pre ref={logBoxRef} className="mailing-log" aria-live="polite">
-                {scrapeLogs.length
-                  ? scrapeLogs.join("\n")
-                  : "Clique em Buscar no PAP para ver cada passo do login, filtros e importação…"}
-              </pre>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="space-y-2">
+                <Label>
+                  Tela ao vivo do PAP
+                  {liveShotLabel ? (
+                    <span className="ml-2 font-normal text-white/45">· {liveShotLabel}</span>
+                  ) : null}
+                </Label>
+                <div className="mailing-live-frame">
+                  {liveShotUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      key={liveShotAt || liveShotUrl}
+                      src={liveShotUrl}
+                      alt="Tela ao vivo do browser no PAP"
+                      className="mailing-live-img"
+                    />
+                  ) : (
+                    <div className="mailing-live-empty">
+                      {scrapeRunning
+                        ? "Aguardando primeiro print do browser…"
+                        : "Inicie a busca para ver o PAP mexendo aqui."}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Log ao vivo do acesso PAP</Label>
+                <pre ref={logBoxRef} className="mailing-log" aria-live="polite">
+                  {scrapeLogs.length
+                    ? scrapeLogs.join("\n")
+                    : "Clique em Buscar no PAP para ver cada passo do login, filtros e importação…"}
+                </pre>
+              </div>
             </div>
           </section>
         ) : null}

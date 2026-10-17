@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { Browser, Page } from "playwright";
 import { launchBrowser } from "@/lib/browser";
 import { newId } from "@/lib/mailing/crypto";
@@ -13,6 +14,7 @@ import {
   defaultScrapeProgress,
 } from "@/lib/mailing/store";
 import type { LeadPartData, MailingLead, ScrapeProgress } from "@/lib/mailing/types";
+import { ensureDataDirs, MAILING_LIVE_DIR, MAILING_LIVE_SHOT } from "@/lib/paths";
 
 const PAP_HOME = "https://pap.niointernet.com.br/";
 const PAP_HISTORICO = "https://pap.niointernet.com.br/administrativo/historico";
@@ -121,6 +123,44 @@ function scrapeLog(line: string, patch: Partial<ScrapeProgress> = {}) {
   return next;
 }
 
+let liveShotBusy = false;
+
+/** Grava print do browser em data/mailing/live/live.png para o painel ao vivo. */
+async function captureLiveShot(page: Page, label: string) {
+  if (liveShotBusy) return;
+  liveShotBusy = true;
+  try {
+    ensureDataDirs();
+    fs.mkdirSync(MAILING_LIVE_DIR, { recursive: true });
+    await page.screenshot({
+      path: MAILING_LIVE_SHOT,
+      type: "png",
+      fullPage: false,
+      timeout: 8000,
+    });
+    updateProgress({
+      liveShotLabel: label,
+      liveShotAt: new Date().toISOString(),
+      currentUrl: page.url(),
+    });
+  } catch {
+    // página pode ter fechado no cancel — ignora
+  } finally {
+    liveShotBusy = false;
+  }
+}
+
+function startLiveShotLoop(page: Page) {
+  const timer = setInterval(() => {
+    if (isScrapeCancelRequested()) {
+      clearInterval(timer);
+      return;
+    }
+    void captureLiveShot(page, "ao-vivo");
+  }, 1800);
+  return timer;
+}
+
 function isOnPap(url: string) {
   return /pap\.niointernet\.com\.br/i.test(url) && !/login\.microsoftonline|microsoft\.com\/login/i.test(url);
 }
@@ -129,12 +169,14 @@ async function loginPap(page: Page, email: string, password: string) {
   scrapeLog(`Abrindo PAP: ${PAP_HOME}`, { currentUrl: PAP_HOME });
   await page.goto(PAP_HOME, { waitUntil: "domcontentloaded", timeout: 90000 });
   scrapeLog(`Página carregada: ${page.url()}`, { currentUrl: page.url() });
+  await captureLiveShot(page, "pap-home");
 
   scrapeLog("Aguardando campo de e-mail Microsoft…");
   await page.waitForSelector("#i0116", { timeout: 45000 });
   await humanPause(600, 1000);
   scrapeLog(`Preenchendo e-mail: ${email}`);
   await page.fill("#i0116", email);
+  await captureLiveShot(page, "login-email");
   await humanPause(350, 650);
   scrapeLog("Clicando Avançar (e-mail)…");
   await page.click("#idSIButton9");
@@ -153,10 +195,12 @@ async function loginPap(page: Page, email: string, password: string) {
     scrapeLog("Retry fill() na senha (pressSequentially incompleto)…");
     await passInput.fill(password);
   }
+  await captureLiveShot(page, "login-senha");
   await humanPause(350, 650);
   scrapeLog("Clicando Entrar (senha)…");
   await page.click("#idSIButton9");
   await sleep(2000);
+  await captureLiveShot(page, "pos-senha");
 
   // Não usar waitForURL(..., load): SPA Microsoft/PAP muitas vezes não dispara "load".
   const deadline = Date.now() + 120_000;
@@ -459,6 +503,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
   );
 
   let browser: Browser | null = null;
+  let liveTimer: ReturnType<typeof setInterval> | null = null;
   const collected: MailingLead[] = [];
   const seenIds = new Set<string>();
 
@@ -476,7 +521,8 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     });
     const page = await brContext.newPage();
-    scrapeLog("Browser pronto (timezone America/Sao_Paulo).");
+    scrapeLog("Browser pronto (timezone America/Sao_Paulo) — tela ao vivo ligada.");
+    liveTimer = startLiveShotLoop(page);
 
     const pageBuckets: Array<Record<string, unknown>[]> = [];
     page.on("response", async (res) => {
@@ -490,6 +536,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         if (Array.isArray(vendas) && vendas.length) {
           pageBuckets.push(vendas);
           scrapeLog(`API vendas capturada: ${vendas.length} registro(s) nesta resposta.`);
+          void captureLiveShot(page, "api-vendas");
         }
       } catch {
         // ignore parse errors
@@ -498,28 +545,34 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
 
     assertNotCancelled();
     await loginPap(page, creds.email, creds.password);
+    await captureLiveShot(page, "historico");
     assertNotCancelled();
 
     scrapeLog(`Abrindo filtros · Tipo = ${tipoLabel}`);
     await openFilters(page);
+    await captureLiveShot(page, "filtros-abertos");
     assertNotCancelled();
     await selectTipo(page, tipoLabel);
     scrapeLog(`Tipo selecionado: ${tipoLabel}`);
+    await captureLiveShot(page, `tipo-${tipoLabel.toLowerCase()}`);
 
     if (saleType === "venda") {
       assertNotCancelled();
       scrapeLog(`Selecionando Status Primário = ${STATUS_PRIMARIO_VENDA}`);
       await selectStatusPrimario(page, STATUS_PRIMARIO_VENDA);
       scrapeLog("Status Primário OK (Aguardando tratamento).");
+      await captureLiveShot(page, "status-aguardando");
     }
 
     assertNotCancelled();
     scrapeLog(`Definindo período ${options.dateFrom} → ${options.dateTo}`);
     const v1 = await pickCalendarDay(page, "De", from.day);
     scrapeLog(`Data De = ${v1}`);
+    await captureLiveShot(page, "data-de");
     assertNotCancelled();
     const v2 = await pickCalendarDay(page, "Até", to.day);
     scrapeLog(`Data Até = ${v2}`);
+    await captureLiveShot(page, "data-ate");
     if (!v1.includes(String(from.day)) || !v2.includes(String(to.day))) {
       throw new Error(`Falha ao definir datas (De=${v1}, Até=${v2}).`);
     }
@@ -528,7 +581,9 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     scrapeLog("Aplicando filtros no PAP (aguarde a lista)…");
     pageBuckets.length = 0;
     await applyFilter(page);
+    await captureLiveShot(page, "filtrando");
     await closeDrawer(page);
+    await captureLiveShot(page, "lista");
     scrapeLog("Filtros aplicados · lendo lista (sem Avançar/Detalhar).");
 
     // Venda e Interesse: mailing sai da lista (/api/portal/vendas).
@@ -548,6 +603,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
       await sleep(1500);
       const latest = pageBuckets[pageBuckets.length - 1] || [];
       scrapeLog(`Página ${pageNo}: ${latest.length} linha(s) na captura da API.`);
+      await captureLiveShot(page, `pagina-${pageNo}`);
       for (const venda of latest) {
         assertNotCancelled();
         const papId = String(venda._id || venda.numeroPedido || "");
@@ -652,6 +708,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
       cancelled: true,
     };
   } finally {
+    if (liveTimer) clearInterval(liveTimer);
     globalScrapeCtl.mailingScrapeBrowser = null;
     clearCancelScrape();
     await browser?.close().catch(() => undefined);
