@@ -130,10 +130,18 @@ async function loginPap(page: Page, email: string, password: string) {
       break;
     }
 
-    const pwdError = page.locator("#passwordError, #usernameError, .alert-error, #errorText");
+    const pwdError = page.locator("#passwordError, #usernameError, #errorText");
     if (await pwdError.count()) {
+      const visible = await pwdError.first().isVisible().catch(() => false);
       const errText = ((await pwdError.first().innerText().catch(() => "")) || "").trim();
-      if (errText) throw new Error(`Login Microsoft recusado: ${errText}`);
+      if (visible && errText && /incorret|inválid|invalid|não foi possível|locked|bloquead/i.test(errText)) {
+        // Confirma por 2s (evita falso positivo de texto residual)
+        await sleep(2000);
+        const still = ((await pwdError.first().innerText().catch(() => "")) || "").trim();
+        if (still) {
+          throw new Error(`Login Microsoft recusado: ${still}`);
+        }
+      }
     }
 
     // "Stay signed in?" / KMSI / Continuar

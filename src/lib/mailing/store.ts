@@ -130,9 +130,10 @@ export function loadPapCredentials(): PapCredentials {
   const envEmail =
     process.env.PAP_USER || process.env.NIO_PAP_USER || "TT829944@vtalcorp.onmicrosoft.com";
   const envPass = process.env.PAP_PASS || process.env.NIO_PAP_PASS || "Niosuper001one";
-  // Arquivo só vale se o e-mail parecer e-mail (evita sobrescrever com "fabio" do login mailing)
+  // Arquivo só vale se o e-mail parecer e-mail (evita sobrescrever com "fabio" do login mailing).
+  // Se o e-mail do arquivo for inválido, ignora também a senha do arquivo (pode ser One@2026).
   const fileEmail = looksLikeEmail(fromFile.email) ? String(fromFile.email).trim() : "";
-  const filePass = String(fromFile.password || "").trim();
+  const filePass = fileEmail ? String(fromFile.password || "").trim() : "";
   return {
     email: fileEmail || envEmail,
     password: filePass || envPass,
