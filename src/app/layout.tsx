@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
-import { isWhatsAppCrmMode } from "@/lib/app-mode";
+import { isMailingMode, isWhatsAppCrmMode } from "@/lib/app-mode";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -12,6 +12,13 @@ const geistSans = Geist({
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata(): Promise<Metadata> {
+  if (isMailingMode()) {
+    return {
+      title: "ONE TELECOM — Mailing PAP",
+      description:
+        "Distribuição de mailing de interesses do PAP entre vendedores One Telecom.",
+    };
+  }
   if (isWhatsAppCrmMode()) {
     return {
       title: "Unik WhatsApp CRM — Robô vendedores NIO",

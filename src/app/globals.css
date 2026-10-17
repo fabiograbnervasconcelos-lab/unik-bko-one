@@ -128,3 +128,151 @@
     @apply font-sans;
   }
 }
+
+/* ONE TELECOM mailing — blue→green on navy */
+.mailing-shell {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(0, 85, 255, 0.35), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(0, 200, 83, 0.22), transparent 50%),
+    linear-gradient(160deg, #070b14 0%, #0a0f1a 45%, #0c1524 100%);
+  color: #f4f7fb;
+}
+
+.mailing-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(8, 12, 22, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.mailing-panel {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(16, 24, 40, 0.92), rgba(10, 15, 26, 0.88));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
+.mailing-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  background: linear-gradient(90deg, #3b82f6, #14b8a6, #22c55e);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.mailing-cta {
+  background: linear-gradient(90deg, #0055ff, #00a86b) !important;
+  color: white !important;
+  border: none !important;
+}
+
+.mailing-stat {
+  text-align: left;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.mailing-stat:hover {
+  transform: translateY(-1px);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.mailing-stat.active {
+  border-color: rgba(0, 85, 255, 0.55);
+  background: linear-gradient(135deg, rgba(0, 85, 255, 0.18), rgba(0, 200, 83, 0.12));
+}
+
+.mailing-select {
+  width: 100%;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.25);
+  color: white;
+  padding: 0 0.75rem;
+}
+
+.mailing-table th {
+  padding: 0.65rem 0.5rem;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mailing-table td {
+  padding: 0.7rem 0.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: top;
+}
+
+.mailing-log {
+  max-height: 420px;
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.45);
+  padding: 0.85rem 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #b8e0ff;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mailing-live-frame {
+  position: relative;
+  min-height: 280px;
+  max-height: 420px;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.mailing-live-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  object-position: top center;
+  background: #0b1220;
+}
+
+.mailing-live-empty {
+  display: grid;
+  place-items: center;
+  min-height: 280px;
+  padding: 1.5rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.875rem;
+}
+
+.mailing-link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2rem;
+  padding: 0 0.9rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.05);
+  color: white;
+  font-size: 0.875rem;
+}
+
+.mailing-shell input,
+.mailing-shell textarea,
+.mailing-shell select {
+  color-scheme: dark;
+}
