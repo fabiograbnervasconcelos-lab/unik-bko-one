@@ -184,6 +184,12 @@ export function saveScrapeProgress(progress: ScrapeProgress) {
   writeJson(SCRAPE_PATH, progress);
 }
 
+export function findLeadByCpf(leads: MailingLead[], document?: string | null) {
+  const docKey = onlyDigits(document || "");
+  if (!docKey || docKey.length < 11) return -1;
+  return leads.findIndex((item) => onlyDigits(item.document || "") === docKey);
+}
+
 export function upsertLeadByKey(
   leads: MailingLead[],
   lead: Omit<MailingLead, "id" | "createdAt" | "updatedAt"> & {
@@ -191,16 +197,40 @@ export function upsertLeadByKey(
     createdAt?: string;
     updatedAt?: string;
   },
-): { leads: MailingLead[]; created: boolean; lead: MailingLead } {
+): {
+  leads: MailingLead[];
+  created: boolean;
+  skipped: boolean;
+  skipReason?: "cpf";
+  lead: MailingLead;
+} {
   const now = new Date().toISOString();
   const phoneKey = onlyPhone(lead.phone);
   const docKey = onlyDigits(lead.document || "");
   const papKey = (lead.papId || "").trim();
+  const normalizedDoc = docKey.length >= 11 ? docKey : "";
+
+  // CPF já cadastrado → não grava / não atualiza
+  if (normalizedDoc) {
+    const byCpf = findLeadByCpf(leads, normalizedDoc);
+    if (byCpf >= 0) {
+      return {
+        leads,
+        created: false,
+        skipped: true,
+        skipReason: "cpf",
+        lead: leads[byCpf]!,
+      };
+    }
+  }
 
   const existingIndex = leads.findIndex((item) => {
     if (papKey && item.papId && item.papId === papKey) return true;
-    if (docKey && onlyDigits(item.document || "") === docKey) return true;
-    if (phoneKey && onlyPhone(item.phone) === phoneKey && normalizeName(item.name) === normalizeName(lead.name)) {
+    if (
+      phoneKey &&
+      onlyPhone(item.phone) === phoneKey &&
+      normalizeName(item.name) === normalizeName(lead.name)
+    ) {
       return true;
     }
     return false;
@@ -208,10 +238,22 @@ export function upsertLeadByKey(
 
   if (existingIndex >= 0) {
     const prev = leads[existingIndex]!;
+    // Se o lead existente já tem CPF e o novo traz outro CPF, não sobrescreve
+    const prevDoc = onlyDigits(prev.document || "");
+    if (prevDoc.length >= 11 && normalizedDoc && prevDoc !== normalizedDoc) {
+      return {
+        leads,
+        created: false,
+        skipped: true,
+        skipReason: "cpf",
+        lead: prev,
+      };
+    }
     const merged: MailingLead = {
       ...prev,
       ...lead,
       id: prev.id,
+      document: prev.document || normalizedDoc || lead.document,
       queue: prev.queue === "transferir" ? lead.queue || prev.queue : prev.queue,
       assignedTo: prev.assignedTo,
       assignedAt: prev.assignedAt,
@@ -226,7 +268,7 @@ export function upsertLeadByKey(
     };
     const next = [...leads];
     next[existingIndex] = merged;
-    return { leads: next, created: false, lead: merged };
+    return { leads: next, created: false, skipped: false, lead: merged };
   }
 
   const created: MailingLead = {
@@ -235,7 +277,7 @@ export function upsertLeadByKey(
     queue: lead.queue || "transferir",
     name: lead.name,
     phone: lead.phone,
-    document: lead.document,
+    document: normalizedDoc || lead.document,
     email: lead.email,
     address: lead.address,
     city: lead.city,
@@ -258,7 +300,7 @@ export function upsertLeadByKey(
     updatedAt: now,
     createdBy: lead.createdBy,
   };
-  return { leads: [...leads, created], created: true, lead: created };
+  return { leads: [...leads, created], created: true, skipped: false, lead: created };
 }
 
 export function onlyDigits(value: string) {

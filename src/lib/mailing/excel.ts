@@ -1,6 +1,6 @@
 import * as XLSX from "xlsx";
 import { newId } from "@/lib/mailing/crypto";
-import { onlyPhone, updateLeads, upsertLeadByKey } from "@/lib/mailing/store";
+import { onlyDigits, onlyPhone, updateLeads, upsertLeadByKey } from "@/lib/mailing/store";
 import type { MailingLead } from "@/lib/mailing/types";
 
 const NAME_KEYS = ["nome", "name", "cliente", "razao", "razão", "razaosocial"];
@@ -91,13 +91,15 @@ export async function importExcelLeads(params: {
         errors.push(`Linha ${index + 2}: nome e telefone são obrigatórios.`);
         return;
       }
+      const rawDoc = pick(row, DOC_KEYS);
+      const document = onlyDigits(rawDoc || "") || undefined;
       const draft = {
         id: newId("lead"),
         source: "excel" as const,
         queue: "transferir" as const,
         name,
         phone: onlyPhone(phone),
-        document: pick(row, DOC_KEYS) || undefined,
+        document,
         email: pick(row, EMAIL_KEYS) || undefined,
         address: pick(row, ADDRESS_KEYS) || undefined,
         city: pick(row, CITY_KEYS) || undefined,
@@ -115,6 +117,9 @@ export async function importExcelLeads(params: {
         created.push(result.lead);
       } else {
         skipped += 1;
+        if (result.skipReason === "cpf") {
+          errors.push(`Linha ${index + 2}: CPF ${document} já cadastrado — ignorado.`);
+        }
       }
     });
     return next;

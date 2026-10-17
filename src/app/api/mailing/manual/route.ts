@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { canDistribute, getSessionUser } from "@/lib/mailing/auth";
 import { newId } from "@/lib/mailing/crypto";
-import { onlyPhone, updateLeads, upsertLeadByKey } from "@/lib/mailing/store";
+import { onlyDigits, onlyPhone, updateLeads, upsertLeadByKey } from "@/lib/mailing/store";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +33,9 @@ export async function POST(request: Request) {
     );
   }
 
+  const document = onlyDigits(body?.document || "") || undefined;
   let created = null as ReturnType<typeof upsertLeadByKey>["lead"] | null;
+  let skippedCpf = false;
   await updateLeads((leads) => {
     const result = upsertLeadByKey(leads, {
       id: newId("lead"),
@@ -41,7 +43,7 @@ export async function POST(request: Request) {
       queue: "transferir",
       name,
       phone,
-      document: body?.document?.trim() || undefined,
+      document,
       email: body?.email?.trim() || undefined,
       address: body?.address?.trim() || undefined,
       city: body?.city?.trim() || undefined,
@@ -50,9 +52,20 @@ export async function POST(request: Request) {
       notes: body?.notes?.trim() || undefined,
       createdBy: user.id,
     });
+    if (result.skipped && result.skipReason === "cpf") {
+      skippedCpf = true;
+      return leads;
+    }
     created = result.lead;
     return result.leads;
   });
+
+  if (skippedCpf) {
+    return NextResponse.json(
+      { error: `CPF ${document} já cadastrado — cliente ignorado.` },
+      { status: 409 },
+    );
+  }
 
   return NextResponse.json({ lead: created });
 }

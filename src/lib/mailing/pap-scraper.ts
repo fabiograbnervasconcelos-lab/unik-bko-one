@@ -636,7 +636,16 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
             ...draft,
             id: newId("lead"),
           });
-          if (result.created) {
+          if (result.skipped && result.skipReason === "cpf") {
+            scrapeLog(
+              `Ignorado CPF já cadastrado: ${draft.name} · CPF ${draft.document || "—"} · pedido ${draft.part1?.numeroPedido || ""}`,
+              {
+                skipped: loadScrapeProgress().skipped + 1,
+                processed: loadScrapeProgress().processed + 1,
+                lastLeadName: draft.name,
+              },
+            );
+          } else if (result.created) {
             collected.push(result.lead);
             scrapeLog(
               `Importado: ${result.lead.name} · ${result.lead.part1?.numeroPedido || ""} · ${result.lead.phone}`,
@@ -647,7 +656,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
               },
             );
           } else {
-            scrapeLog(`Já existia: ${result.lead.name}`, {
+            scrapeLog(`Já existia (sem novo CPF): ${result.lead.name}`, {
               skipped: loadScrapeProgress().skipped + 1,
               processed: loadScrapeProgress().processed + 1,
               lastLeadName: result.lead.name,
