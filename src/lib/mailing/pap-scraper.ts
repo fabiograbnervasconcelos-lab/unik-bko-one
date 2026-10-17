@@ -364,11 +364,121 @@ async function selectStatusPrimario(page: Page, label: string) {
 
 async function readOpenCalendarMonthYear(page: Page) {
   const header = page.locator(
-    ".MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-switchHeader p",
+    ".MuiPopover-paper .MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-switchHeader p",
   );
   if (!(await header.count())) return null;
   const text = (await header.first().innerText().catch(() => "")) || "";
   return parsePtMonthYear(text);
+}
+
+const DATE_DAY_SELECTOR =
+  ".MuiPopover-paper button.MuiPickersDay-day:not(.MuiPickersDay-hidden), .MuiPickersBasePicker-container button.MuiPickersDay-day:not(.MuiPickersDay-hidden)";
+
+async function ensureFiltersOpen(page: Page) {
+  const drawer = page.locator(".MuiDrawer-paper");
+  if (await drawer.isVisible().catch(() => false)) return;
+  scrapeLog("Drawer de filtros fechou — reabrindo…");
+  await openFilters(page);
+}
+
+/** Fecha só o popover do DatePicker. NÃO usa Escape no escuro — isso fecha o drawer. */
+async function closeAnyDatePopover(page: Page) {
+  const openDays = page.locator(DATE_DAY_SELECTOR);
+  if (!(await openDays.count())) return;
+  // Backdrop transparente do MUI Popover
+  const backdrop = page.locator(".MuiPopover-root > div[aria-hidden='true'], .MuiBackdrop-root").first();
+  if (await backdrop.count()) {
+    await backdrop.click({ force: true }).catch(() => undefined);
+    await sleep(250);
+  }
+  if (await openDays.first().isVisible().catch(() => false)) {
+    // Escape só com popover aberto (fecha o picker, não o drawer)
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await sleep(250);
+  }
+  await ensureFiltersOpen(page);
+}
+
+async function openDatePopover(page: Page, root: ReturnType<Page["locator"]>) {
+  await ensureFiltersOpen(page);
+  await closeAnyDatePopover(page);
+  await root.scrollIntoViewIfNeeded().catch(() => undefined);
+
+  const calendarBtn = root.locator(".MuiInputAdornment-root button").first();
+  const strategies: Array<() => Promise<void>> = [
+    async () => {
+      await calendarBtn.click({ force: true });
+    },
+    async () => {
+      await root.locator("input").first().click({ force: true });
+      await humanPause(200, 350);
+      await calendarBtn.click({ force: true });
+    },
+    async () => {
+      // Clique no SVG do calendário
+      await root.locator(".MuiInputAdornment-root svg").first().click({ force: true });
+    },
+  ];
+
+  let lastErr: unknown;
+  for (let i = 0; i < strategies.length; i++) {
+    try {
+      await ensureFiltersOpen(page);
+      await strategies[i]!();
+      await page.waitForSelector(DATE_DAY_SELECTOR, { state: "visible", timeout: 6000 });
+      await humanPause(350, 600);
+      return;
+    } catch (err) {
+      lastErr = err;
+      scrapeLog(`Calendário: abertura tentativa ${i + 1}/${strategies.length} falhou — retry…`);
+      await closeAnyDatePopover(page);
+      await humanPause(200, 400);
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("Não foi possível abrir o calendário do DatePicker.");
+}
+
+async function setDateByTyping(
+  page: Page,
+  root: ReturnType<Page["locator"]>,
+  expected: string,
+) {
+  await ensureFiltersOpen(page);
+  await closeAnyDatePopover(page);
+  const input = root.locator("input").first();
+  await input.scrollIntoViewIfNeeded().catch(() => undefined);
+  await input.click({ force: true });
+  await humanPause(200, 400);
+  // KeyboardDatePicker do MUI v4: setter nativo + eventos React
+  await input.evaluate((el, v) => {
+    const node = el as HTMLInputElement;
+    node.focus();
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    setter?.call(node, "");
+    node.dispatchEvent(new Event("input", { bubbles: true }));
+    setter?.call(node, v);
+    node.dispatchEvent(new Event("input", { bubbles: true }));
+    node.dispatchEvent(new Event("change", { bubbles: true }));
+    node.blur();
+  }, expected);
+  await humanPause(400, 700);
+  let value = (await input.inputValue()).trim();
+  if (value === expected) return value;
+
+  // Fallback: digitar caractere a caractere (máscara dd/mm/yyyy)
+  await input.click({ force: true });
+  await page.keyboard.press("Control+a");
+  await sleep(80);
+  await page.keyboard.press("Backspace");
+  await sleep(100);
+  await input.pressSequentially(expected, { delay: 45 });
+  await page.keyboard.press("Tab");
+  await humanPause(500, 800);
+  value = (await input.inputValue()).trim();
+  await ensureFiltersOpen(page);
+  return value;
 }
 
 /**
@@ -381,81 +491,84 @@ async function pickCalendarDate(
   parts: { day: number; month: number; year: number },
 ) {
   const expected = formatBrDate(parts);
+  await ensureFiltersOpen(page);
   const root = page
     .locator(".MuiDrawer-paper .MuiTextField-root")
     .filter({ has: page.locator(`label:text-is("${label}")`) });
-
-  // 1) Tenta digitar a data completa no input (mais fiel ao que o usuário colocou)
   const input = root.locator("input").first();
-  await input.click({ force: true });
-  await humanPause(200, 400);
-  await input.fill("");
-  await input.pressSequentially(expected, { delay: 35 });
-  await page.keyboard.press("Tab");
-  await humanPause(500, 800);
-  let value = await input.inputValue();
-  if (value.trim() === expected) {
-    scrapeLog(`Campo ${label} digitado: ${value}`);
-    return value;
+
+  // 1) Digitar primeiro (sem Escape cego — senão o drawer fecha)
+  scrapeLog(`Definindo ${label} = ${expected}…`);
+  const typed = await setDateByTyping(page, root, expected);
+  if (typed === expected) {
+    scrapeLog(`Campo ${label} digitado: ${typed}`);
+    return typed;
   }
+  scrapeLog(
+    `Campo ${label} não aceitou digitação (${typed || "vazio"}) — usando calendário…`,
+  );
 
   // 2) Fallback: calendário com navegação de mês/ano
-  scrapeLog(
-    `Campo ${label} não aceitou digitação (${value || "vazio"}) — usando calendário até ${expected}…`,
-  );
-  await root.locator("button").first().click({ force: true });
-  await page.waitForSelector("button.MuiPickersDay-day:not(.MuiPickersDay-hidden)", {
-    timeout: 10000,
-  });
-  await humanPause(400, 700);
+  try {
+    await openDatePopover(page, root);
 
-  const targetIndex = parts.year * 12 + (parts.month - 1);
-  for (let i = 0; i < 36; i++) {
-    assertNotCancelled();
-    const current = await readOpenCalendarMonthYear(page);
-    if (!current) break;
-    const currentIndex = current.year * 12 + (current.month - 1);
-    if (currentIndex === targetIndex) break;
+    const targetIndex = parts.year * 12 + (parts.month - 1);
+    for (let i = 0; i < 36; i++) {
+      assertNotCancelled();
+      const current = await readOpenCalendarMonthYear(page);
+      if (!current) break;
+      const currentIndex = current.year * 12 + (current.month - 1);
+      if (currentIndex === targetIndex) break;
 
-    const buttons = page.locator(
-      ".MuiPickersCalendarHeader-switchHeader button.MuiPickersCalendarHeader-iconButton",
-    );
-    const goPrev = currentIndex > targetIndex;
-    const btn = goPrev ? buttons.first() : buttons.nth(1);
-    if (await btn.isDisabled().catch(() => true)) {
+      const buttons = page.locator(
+        ".MuiPopover-paper .MuiPickersCalendarHeader-switchHeader button.MuiPickersCalendarHeader-iconButton, .MuiPickersCalendarHeader-switchHeader button.MuiPickersCalendarHeader-iconButton",
+      );
+      const goPrev = currentIndex > targetIndex;
+      const btn = goPrev ? buttons.first() : buttons.nth(1);
+      if (await btn.isDisabled().catch(() => true)) {
+        throw new Error(
+          `Calendário ${label}: não foi possível navegar até ${expected} (mês aberto: ${current.month}/${current.year}).`,
+        );
+      }
+      scrapeLog(
+        `Calendário ${label}: ${MONTHS_PT[current.month - 1]} ${current.year} → ${goPrev ? "mês anterior" : "próximo mês"}`,
+      );
+      await btn.click({ force: true });
+      await humanPause(350, 600);
+    }
+
+    const opened = await readOpenCalendarMonthYear(page);
+    if (!opened || opened.month !== parts.month || opened.year !== parts.year) {
       throw new Error(
-        `Calendário ${label}: não foi possível navegar até ${expected} (mês aberto: ${current.month}/${current.year}).`,
+        `Calendário ${label}: esperado ${parts.month}/${parts.year}, aberto ${opened?.month || "?"}/${opened?.year || "?"}.`,
       );
     }
-    scrapeLog(
-      `Calendário ${label}: ${MONTHS_PT[current.month - 1]} ${current.year} → ${goPrev ? "mês anterior" : "próximo mês"}`,
-    );
-    await btn.click({ force: true });
-    await humanPause(350, 600);
-  }
 
-  const opened = await readOpenCalendarMonthYear(page);
-  if (!opened || opened.month !== parts.month || opened.year !== parts.year) {
+    await page
+      .locator(
+        ".MuiPopover-paper button.MuiPickersDay-day:not(.MuiPickersDay-hidden):not(.MuiPickersDay-dayDisabled)",
+      )
+      .filter({ hasText: new RegExp(`^${parts.day}$`) })
+      .first()
+      .click({ force: true });
+    await humanPause(800, 1300);
+    await ensureFiltersOpen(page);
+
+    const value = (await input.inputValue()).trim();
+    if (value === expected) {
+      scrapeLog(`Campo ${label} confirmado no calendário: ${value}`);
+      return value;
+    }
+    scrapeLog(`Calendário ${label} deixou valor "${value || "vazio"}" (esperado ${expected}).`);
     throw new Error(
-      `Calendário ${label}: esperado ${parts.month}/${parts.year}, aberto ${opened?.month || "?"}/${opened?.year || "?"}.`,
+      `Data ${label} divergente: esperado ${expected}, campo ficou ${value || "(vazio)"}.`,
     );
+  } catch (err) {
+    await closeAnyDatePopover(page);
+    throw err instanceof Error
+      ? err
+      : new Error(`Data ${label} não aplicada. Esperado ${expected}.`);
   }
-
-  await page
-    .locator("button.MuiPickersDay-day:not(.MuiPickersDay-hidden):not(.MuiPickersDay-dayDisabled)")
-    .filter({ hasText: new RegExp(`^${parts.day}$`) })
-    .first()
-    .click({ force: true });
-  await humanPause(800, 1300);
-
-  value = await input.inputValue();
-  if (value.trim() !== expected) {
-    throw new Error(
-      `Data ${label} divergente: digitado/esperado ${expected}, campo ficou ${value || "(vazio)"}.`,
-    );
-  }
-  scrapeLog(`Campo ${label} confirmado no calendário: ${value}`);
-  return value;
 }
 
 async function applyFilter(page: Page) {
@@ -556,30 +669,74 @@ function mapVendaToLead(
   };
 }
 
-async function gotoNextResultsPage(page: Page) {
-  const next = page.locator(
-    "button[aria-label*='next' i], button[aria-label*='próxim' i], .MuiTablePagination-actions button:last-child, button:has(svg[data-testid='KeyboardArrowRightIcon'])",
-  );
-  // MUI table pagination usually has two buttons; last enabled is next
+/**
+ * Avança UMA página (seta >), nunca a última (seta >|).
+ * MUI TablePagination com first/last: [primeira, anterior, próxima, última].
+ */
+async function resolveNextPageButton(page: Page) {
   const actions = page.locator(".MuiTablePagination-actions button");
-  if (await actions.count()) {
-    const last = actions.last();
-    if (await last.isDisabled()) return false;
-    await humanPause(1200, 2200);
-    await last.click({ force: true });
-    await sleep(6000);
-    await humanPause(1000, 1800);
-    return true;
+  const count = await actions.count();
+
+  const byIcon = page
+    .locator(".MuiTablePagination-actions button")
+    .filter({
+      has: page.locator(
+        "svg[data-testid='KeyboardArrowRightIcon'], svg[data-testid='NavigateNextIcon']",
+      ),
+    })
+    .first();
+  if (await byIcon.count()) return byIcon;
+
+  const byAria = page.locator(
+    [
+      ".MuiTablePagination-actions button[aria-label='next page']",
+      ".MuiTablePagination-actions button[aria-label='Next page']",
+      ".MuiTablePagination-actions button[aria-label='próxima página']",
+      ".MuiTablePagination-actions button[aria-label='Próxima página']",
+      ".MuiTablePagination-actions button[aria-label='Go to next page']",
+    ].join(", "),
+  );
+  if (await byAria.count()) return byAria.first();
+
+  // Posição: 4 botões → índice 2 (próxima); 2 botões → índice 1 (próxima).
+  // Nunca actions.last() quando há 4 — isso é a ÚLTIMA página (>|).
+  if (count >= 4) return actions.nth(2);
+  if (count === 2) return actions.nth(1);
+  if (count === 1) return actions.first();
+  return null;
+}
+
+async function gotoNextResultsPage(page: Page) {
+  await humanPause(800, 1400);
+
+  const nextBtn = await resolveNextPageButton(page);
+  if (!nextBtn) {
+    scrapeLog("Botão próxima página (>) não encontrado.");
+    return false;
   }
-  if (await next.count()) {
-    const btn = next.last();
-    if (await btn.isDisabled()) return false;
-    await humanPause(1200, 2200);
-    await btn.click({ force: true });
-    await sleep(6000);
-    return true;
+
+  const label = (
+    (await nextBtn.getAttribute("aria-label").catch(() => "")) || ""
+  ).toLowerCase();
+  if (/last|última|ultima/.test(label)) {
+    scrapeLog(
+      `Paginação: recusei clique em "${label || "última"}" — preciso da seta >.`,
+    );
+    return false;
   }
-  return false;
+
+  if (await nextBtn.isDisabled().catch(() => true)) {
+    scrapeLog("Botão próxima página (>) desabilitado — fim da lista.");
+    return false;
+  }
+
+  scrapeLog(
+    `Clicando seta próxima página (>) ${label ? `[${label}] ` : ""}— uma página por vez…`,
+  );
+  await nextBtn.click({ force: true });
+  await sleep(6000);
+  await humanPause(1000, 1800);
+  return true;
 }
 
 export async function runPapHistoricoScrape(options: PapScrapeOptions) {
@@ -707,8 +864,10 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
 
     // Venda e Interesse: mailing sai da lista (/api/portal/vendas).
     // Não clicar em Detalhar / Avançar — dados já vêm na primeira página da lista.
-    const maxPages = options.maxPages ?? 50;
+    // Paginação: sempre seta > (próxima), nunca >| (última). Limite alto p/ listas grandes.
+    const maxPages = options.maxPages ?? 2000;
     let pageNo = 1;
+    let consumedBuckets = 0;
     while (pageNo <= maxPages) {
       assertNotCancelled();
       scrapeLog(
@@ -718,9 +877,15 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         { page: pageNo },
       );
 
-      // Wait a bit for response capture
-      await sleep(1500);
-      const latest = pageBuckets[pageBuckets.length - 1] || [];
+      // Espera captura da API desta página (novo bucket após Filtrar / próxima)
+      for (let w = 0; w < 20 && pageBuckets.length <= consumedBuckets; w++) {
+        await sleep(500);
+      }
+      const latest =
+        pageBuckets.length > consumedBuckets
+          ? pageBuckets[pageBuckets.length - 1] || []
+          : pageBuckets[pageBuckets.length - 1] || [];
+      consumedBuckets = pageBuckets.length;
       scrapeLog(`Página ${pageNo}: ${latest.length} linha(s) na captura da API.`);
       await captureLiveShot(page, `pagina-${pageNo}`);
       for (const venda of latest) {
@@ -788,9 +953,24 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
       }
 
       scrapeLog(`Página ${pageNo} concluída · avançando paginação…`);
+      if (pageNo >= maxPages) {
+        scrapeLog(`Limite de ${maxPages} páginas atingido — parei a paginação.`);
+        break;
+      }
+      const bucketsBeforeNext = pageBuckets.length;
       const moved = await gotoNextResultsPage(page);
       if (!moved) {
         scrapeLog("Fim da paginação.");
+        break;
+      }
+      // Garante que a próxima iteração use a resposta da nova página
+      for (let w = 0; w < 24 && pageBuckets.length <= bucketsBeforeNext; w++) {
+        await sleep(500);
+      }
+      if (pageBuckets.length <= bucketsBeforeNext) {
+        scrapeLog(
+          "Paginação: cliquei > mas a API não devolveu página nova — encerrando.",
+        );
         break;
       }
       pageNo += 1;
