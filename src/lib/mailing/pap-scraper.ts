@@ -108,8 +108,17 @@ async function loginPap(page: Page, email: string, password: string) {
   scrapeLog("Aguardando campo de senha…");
   await page.waitForSelector("#i0118", { state: "visible", timeout: 45000 });
   await humanPause(800, 1300);
-  scrapeLog("Preenchendo senha…");
-  await page.fill("#i0118", password);
+  scrapeLog(`Preenchendo senha (${password.length} caracteres)…`);
+  const passInput = page.locator("#i0118");
+  await passInput.click({ force: true });
+  await passInput.fill("");
+  await passInput.pressSequentially(password, { delay: 35 });
+  const typedLen = await passInput.inputValue().then((v) => v.length).catch(() => 0);
+  scrapeLog(`Senha digitada · ${typedLen}/${password.length} caracteres no campo.`);
+  if (typedLen !== password.length) {
+    scrapeLog("Retry fill() na senha (pressSequentially incompleto)…");
+    await passInput.fill(password);
+  }
   await humanPause(350, 650);
   scrapeLog("Clicando Entrar (senha)…");
   await page.click("#idSIButton9");
