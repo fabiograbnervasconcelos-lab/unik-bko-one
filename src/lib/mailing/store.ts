@@ -197,6 +197,7 @@ export function upsertLeadByKey(
     createdAt?: string;
     updatedAt?: string;
   },
+  options?: { allowDuplicateCpf?: boolean },
 ): {
   leads: MailingLead[];
   created: boolean;
@@ -209,9 +210,10 @@ export function upsertLeadByKey(
   const docKey = onlyDigits(lead.document || "");
   const papKey = (lead.papId || "").trim();
   const normalizedDoc = docKey.length >= 11 ? docKey : "";
+  const allowDuplicateCpf = Boolean(options?.allowDuplicateCpf);
 
-  // CPF já cadastrado → não grava / não atualiza
-  if (normalizedDoc) {
+  // CPF já cadastrado → não grava / não atualiza (exceto Venda, onde CPF duplicado é ok)
+  if (normalizedDoc && !allowDuplicateCpf) {
     const byCpf = findLeadByCpf(leads, normalizedDoc);
     if (byCpf >= 0) {
       return {
@@ -226,6 +228,8 @@ export function upsertLeadByKey(
 
   const existingIndex = leads.findIndex((item) => {
     if (papKey && item.papId && item.papId === papKey) return true;
+    // Venda com CPF duplicado permitido: só deduplica pelo papId/pedido
+    if (allowDuplicateCpf) return false;
     if (
       phoneKey &&
       onlyPhone(item.phone) === phoneKey &&
@@ -240,7 +244,12 @@ export function upsertLeadByKey(
     const prev = leads[existingIndex]!;
     // Se o lead existente já tem CPF e o novo traz outro CPF, não sobrescreve
     const prevDoc = onlyDigits(prev.document || "");
-    if (prevDoc.length >= 11 && normalizedDoc && prevDoc !== normalizedDoc) {
+    if (
+      !allowDuplicateCpf &&
+      prevDoc.length >= 11 &&
+      normalizedDoc &&
+      prevDoc !== normalizedDoc
+    ) {
       return {
         leads,
         created: false,
