@@ -754,11 +754,21 @@ async function resolveNextPageButton(page: Page) {
   return null;
 }
 
-function isVendasListResponse(res: { url: () => string; request: () => { method: () => string }; status: () => number }) {
+function isVendasListUrl(url: string) {
+  return /\/api\/portal\/vendas(\?|$)/i.test(url);
+}
+
+function isVendasListResponse(res: {
+  url: () => string;
+  request: () => { method: () => string };
+  status: () => number;
+}) {
+  const method = res.request().method();
   return (
-    res.url().includes("/api/portal/vendas?") &&
-    res.request().method() === "GET" &&
-    res.status() === 200
+    isVendasListUrl(res.url()) &&
+    (method === "GET" || method === "POST") &&
+    res.status() >= 200 &&
+    res.status() < 300
   );
 }
 
@@ -777,18 +787,85 @@ async function readVendasFromResponse(
   }
 }
 
+/** Lê "Resultados: 526-540 de 1202" na barra de paginação. */
+async function readResultadosRange(
+  page: Page,
+): Promise<{ from: number; to: number; total: number } | null> {
+  const text = await page
+    .locator("body")
+    .innerText()
+    .catch(() => "");
+  const m = text.match(/Resultados:\s*(\d+)\s*[-–]\s*(\d+)\s*de\s*(\d+)/i);
+  if (!m) return null;
+  return { from: Number(m[1]), to: Number(m[2]), total: Number(m[3]) };
+}
+
+async function resolvePrevPageButton(page: Page) {
+  const byIcon = page
+    .locator(".MuiTablePagination-actions button")
+    .filter({
+      has: page.locator(
+        "svg[data-testid='KeyboardArrowLeftIcon'], svg[data-testid='NavigateBeforeIcon']",
+      ),
+    })
+    .first();
+  if (await byIcon.count()) return byIcon;
+  const actions = page.locator(".MuiTablePagination-actions button");
+  const count = await actions.count();
+  if (count >= 4) return actions.nth(1);
+  if (count === 2) return actions.nth(0);
+  return null;
+}
+
+/** Tenta aumentar linhas por página (menos páginas = menos falhas). */
+async function tryIncreaseRowsPerPage(page: Page) {
+  const select = page.locator(
+    ".MuiTablePagination-root .MuiTablePagination-select, .MuiTablePagination-root [role='button'][aria-haspopup='listbox']",
+  ).first();
+  if (!(await select.count())) return;
+  try {
+    await select.click({ force: true });
+    await humanPause(300, 500);
+    const opt = page
+      .locator("[role='option'], li[data-value], .MuiMenuItem-root")
+      .filter({ hasText: /^(50|100|25)$/ })
+      .last();
+    if (await opt.count()) {
+      const label = (await opt.innerText()).trim();
+      await opt.click({ force: true });
+      scrapeLog(`Paginação: linhas por página → ${label}`);
+      await sleep(4000);
+    } else {
+      await page.keyboard.press("Escape").catch(() => undefined);
+    }
+  } catch {
+    await page.keyboard.press("Escape").catch(() => undefined);
+  }
+}
+
 /**
- * Clica > e espera a API /vendas da nova página.
- * Só encerra com false quando a seta está desabilitada ou a API voltou vazia.
- * Timeout/API lenta → tenta de novo (não aborta a lista inteira).
+ * Clica > e exige NOVA captura da API /vendas.
+ * Se a UI avançar o "Resultados" sem API (bug PAP/MUI), volta uma página e retenta.
+ * Só retorna false no fim real da lista (seta off ou to >= total).
  */
 async function gotoNextResultsPage(
   page: Page,
   pageBuckets: Array<Record<string, unknown>[]>,
 ): Promise<boolean> {
-  await humanPause(600, 1100);
+  await humanPause(500, 900);
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  const rangeBefore = await readResultadosRange(page);
+  if (rangeBefore) {
+    scrapeLog(
+      `Resultados UI agora: ${rangeBefore.from}-${rangeBefore.to} de ${rangeBefore.total}`,
+    );
+    if (rangeBefore.to >= rangeBefore.total) {
+      scrapeLog("UI já no fim da lista (to >= total).");
+      return false;
+    }
+  }
+
+  for (let attempt = 1; attempt <= 5; attempt++) {
     assertNotCancelled();
     const nextBtn = await resolveNextPageButton(page);
     if (!nextBtn) {
@@ -800,36 +877,46 @@ async function gotoNextResultsPage(
       (await nextBtn.getAttribute("aria-label").catch(() => "")) || ""
     ).toLowerCase();
     if (/last|última|ultima/.test(label)) {
-      scrapeLog(
-        `Paginação: recusei clique em "${label || "última"}" — preciso da seta >.`,
-      );
+      scrapeLog(`Paginação: recusei clique em "${label}" — preciso da seta >.`);
       return false;
     }
-
     if (await nextBtn.isDisabled().catch(() => true)) {
       scrapeLog("Botão próxima página (>) desabilitado — fim da lista.");
       return false;
     }
 
     const bucketsBefore = pageBuckets.length;
+    const rangeAtClick = (await readResultadosRange(page)) || rangeBefore;
     scrapeLog(
-      `Clicando seta próxima página (>) ${label ? `[${label}] ` : ""}— tentativa ${attempt}/3…`,
+      `Clicando seta próxima página (>) ${label ? `[${label}] ` : ""}— tentativa ${attempt}/5…`,
     );
 
     const responsePromise = page
-      .waitForResponse((res) => isVendasListResponse(res), { timeout: 60000 })
+      .waitForResponse((res) => isVendasListResponse(res), { timeout: 45000 })
       .catch(() => null);
 
+    await nextBtn.scrollIntoViewIfNeeded().catch(() => undefined);
     await nextBtn.click({ force: true });
-    const res = await responsePromise;
 
-    // Dá tempo do listener on("response") também ingerir
-    for (let w = 0; w < 25 && pageBuckets.length <= bucketsBefore; w++) {
+    // Espera bucket novo OU (no máximo) mudança de Resultados — mas só sucesso com API
+    const deadline = Date.now() + 45000;
+    let res = await responsePromise;
+    while (Date.now() < deadline && pageBuckets.length <= bucketsBefore) {
+      if (res) break;
+      await sleep(250);
+    }
+    for (let w = 0; w < 20 && pageBuckets.length <= bucketsBefore; w++) {
       await sleep(200);
     }
 
     if (pageBuckets.length > bucketsBefore) {
-      await humanPause(400, 800);
+      const rangeAfter = await readResultadosRange(page);
+      if (rangeAfter) {
+        scrapeLog(
+          `Página OK via API · Resultados ${rangeAfter.from}-${rangeAfter.to} de ${rangeAfter.total}`,
+        );
+      }
+      await humanPause(300, 600);
       return true;
     }
 
@@ -844,38 +931,71 @@ async function gotoNextResultsPage(
         }
         pageBuckets.push(parsed.vendas);
         scrapeLog(
-          `API vendas capturada (via waitForResponse): ${parsed.vendas.length} registro(s).`,
+          `API vendas capturada (via waitForResponse): ${parsed.vendas.length} registro(s)${parsed.total != null ? ` · total=${parsed.total}` : ""}.`,
         );
-        await humanPause(400, 800);
+        await humanPause(300, 600);
         return true;
       }
     }
 
+    const rangeAfter = await readResultadosRange(page);
+    const uiMoved =
+      rangeAtClick &&
+      rangeAfter &&
+      rangeAfter.from > rangeAtClick.from;
+
+    if (uiMoved) {
+      scrapeLog(
+        `Paginação: UI foi para ${rangeAfter!.from}-${rangeAfter!.to} sem API — recuperando (voltar < e avançar de novo)…`,
+      );
+      const prevBtn = await resolvePrevPageButton(page);
+      if (prevBtn && !(await prevBtn.isDisabled().catch(() => true))) {
+        const recoverBuckets = pageBuckets.length;
+        const recoverWait = page
+          .waitForResponse((r) => isVendasListResponse(r), { timeout: 30000 })
+          .catch(() => null);
+        await prevBtn.click({ force: true });
+        await recoverWait;
+        for (let w = 0; w < 30 && pageBuckets.length <= recoverBuckets; w++) {
+          await sleep(200);
+        }
+        // descarta bucket da página anterior se veio — não processar de novo no loop
+        if (pageBuckets.length > recoverBuckets) {
+          pageBuckets.length = recoverBuckets;
+          scrapeLog("Paginação: voltei à página anterior; retento > com API.");
+        }
+      }
+      await sleep(1500);
+      continue;
+    }
+
     scrapeLog(
-      `Paginação: tentativa ${attempt}/3 sem resposta nova da API — ${attempt < 3 ? "tentando de novo…" : "vou verificar se a seta ainda está ativa."}`,
+      `Paginação: tentativa ${attempt}/5 sem API nova${rangeAfter ? ` (UI ${rangeAfter.from}-${rangeAfter.to}/${rangeAfter.total})` : ""}.`,
     );
-    await sleep(2000);
+    await sleep(1500);
   }
 
-  // Última checagem: se a seta desabilitou, acabou; se ainda ativa, NÃO desistir cego —
-  // deixa o loop principal decidir com base no botão.
-  const nextBtn = await resolveNextPageButton(page);
-  if (!nextBtn || (await nextBtn.isDisabled().catch(() => true))) {
-    scrapeLog("Botão próxima página (>) desabilitado após retries — fim da lista.");
+  const finalRange = await readResultadosRange(page);
+  if (finalRange && finalRange.to >= finalRange.total) {
+    scrapeLog("Fim da lista pelo contador Resultados.");
     return false;
   }
-  scrapeLog(
-    "Paginação: API lenta, mas seta > ainda ativa — seguindo para não pular páginas.",
-  );
-  // Empurra bucket vazio-sentinel? Melhor: clicar de novo uma vez com wait longo
+  const nextBtn = await resolveNextPageButton(page);
+  if (!nextBtn || (await nextBtn.isDisabled().catch(() => true))) {
+    scrapeLog("Botão > desabilitado após retries — fim da lista.");
+    return false;
+  }
+
+  // Ainda há páginas: NÃO desistir — uma última tentativa com wait 90s
+  scrapeLog("Paginação: última tentativa longa (90s) com seta > ainda ativa…");
   const bucketsBefore = pageBuckets.length;
   const responsePromise = page
     .waitForResponse((res) => isVendasListResponse(res), { timeout: 90000 })
     .catch(() => null);
   await nextBtn.click({ force: true });
   const res = await responsePromise;
-  for (let w = 0; w < 40 && pageBuckets.length <= bucketsBefore; w++) {
-    await sleep(250);
+  for (let w = 0; w < 50 && pageBuckets.length <= bucketsBefore; w++) {
+    await sleep(200);
   }
   if (pageBuckets.length > bucketsBefore) return true;
   if (res) {
@@ -883,17 +1003,13 @@ async function gotoNextResultsPage(
     if (parsed?.vendas.length) {
       pageBuckets.push(parsed.vendas);
       scrapeLog(
-        `API vendas capturada (retry longo): ${parsed.vendas.length} registro(s).`,
+        `API vendas capturada (retry final): ${parsed.vendas.length} registro(s).`,
       );
       return true;
     }
-    if (parsed && !parsed.vendas.length) {
-      scrapeLog("Paginação: API vazia no retry longo — fim da lista.");
-      return false;
-    }
   }
   scrapeLog(
-    "Paginação: sem nova página da API após retries longos — encerrando para evitar loop.",
+    "Paginação: falhou obter API da próxima página — mantendo job ativo pedirá reexecução do restante.",
   );
   return false;
 }
@@ -958,18 +1074,35 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     liveTimer = startLiveShotLoop(page);
 
     const pageBuckets: Array<Record<string, unknown>[]> = [];
+    let listTotal: number | null = null;
     page.on("response", async (res) => {
       try {
-        if (!res.url().includes("/api/portal/vendas?") || res.request().method() !== "GET") return;
-        if (res.status() !== 200) return;
+        if (!isVendasListUrl(res.url())) return;
+        const method = res.request().method();
+        if (method !== "GET" && method !== "POST") return;
+        if (res.status() < 200 || res.status() >= 300) {
+          scrapeLog(
+            `API vendas HTTP ${res.status()} ${method} — ${res.url().slice(0, 120)}`,
+          );
+          return;
+        }
         const json = (await res.json()) as {
           data?: { vendas?: Record<string, unknown>[]; total?: number };
         };
         const vendas = json?.data?.vendas;
+        if (typeof json?.data?.total === "number") {
+          listTotal = json.data.total;
+        }
         if (Array.isArray(vendas) && vendas.length) {
           pageBuckets.push(vendas);
-          scrapeLog(`API vendas capturada: ${vendas.length} registro(s) nesta resposta.`);
+          scrapeLog(
+            `API vendas capturada: ${vendas.length} registro(s)${listTotal != null ? ` · total=${listTotal}` : ""}.`,
+          );
           void captureLiveShot(page, "api-vendas");
+        } else if (Array.isArray(vendas) && vendas.length === 0) {
+          scrapeLog(
+            `API vendas vazia${listTotal != null ? ` · total=${listTotal}` : ""}.`,
+          );
         }
       } catch {
         // ignore parse errors
@@ -1020,24 +1153,32 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     await closeDrawer(page);
     await captureLiveShot(page, "lista");
     scrapeLog("Filtros aplicados · lendo lista (sem Avançar/Detalhar).");
+    await tryIncreaseRowsPerPage(page);
+    const range0 = await readResultadosRange(page);
+    if (range0) {
+      listTotal = range0.total;
+      scrapeLog(
+        `Lista UI: Resultados ${range0.from}-${range0.to} de ${range0.total}`,
+      );
+    }
 
     // Venda e Interesse: mailing sai da lista (/api/portal/vendas).
-    // Não clicar em Detalhar / Avançar — dados já vêm na primeira página da lista.
-    // Paginação: sempre seta > (próxima), nunca >| (última). Limite alto p/ listas grandes.
-    const maxPages = options.maxPages ?? 2000;
+    // Paginação: seta > até to >= total (ex.: 1202). Nunca >|.
+    const maxPages = options.maxPages ?? 5000;
     let pageNo = 1;
     let consumedBuckets = 0;
     while (pageNo <= maxPages) {
       assertNotCancelled();
+      const rangeNow = await readResultadosRange(page);
       scrapeLog(
         saleType === "venda"
-          ? `Lendo página ${pageNo} (Venda / Aguardando tratamento)…`
-          : `Lendo página ${pageNo} de interesses…`,
+          ? `Lendo página ${pageNo} (Venda / Aguardando tratamento)${rangeNow ? ` · ${rangeNow.from}-${rangeNow.to}/${rangeNow.total}` : ""}…`
+          : `Lendo página ${pageNo} de interesses${rangeNow ? ` · ${rangeNow.from}-${rangeNow.to}/${rangeNow.total}` : ""}…`,
         { page: pageNo },
       );
 
       // Espera captura da API desta página (novo bucket após Filtrar / próxima)
-      for (let w = 0; w < 20 && pageBuckets.length <= consumedBuckets; w++) {
+      for (let w = 0; w < 40 && pageBuckets.length <= consumedBuckets; w++) {
         await sleep(500);
       }
       const latest =
@@ -1045,7 +1186,9 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
           ? pageBuckets[pageBuckets.length - 1] || []
           : pageBuckets[pageBuckets.length - 1] || [];
       consumedBuckets = pageBuckets.length;
-      scrapeLog(`Página ${pageNo}: ${latest.length} linha(s) na captura da API.`);
+      scrapeLog(
+        `Página ${pageNo}: ${latest.length} linha(s) na captura da API${listTotal != null ? ` · meta total=${listTotal}` : ""}.`,
+      );
       await captureLiveShot(page, `pagina-${pageNo}`);
       for (const venda of latest) {
         assertNotCancelled();
@@ -1116,6 +1259,13 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         await humanPause(400, 900);
       }
 
+      const rangeDone = await readResultadosRange(page);
+      if (rangeDone && rangeDone.to >= rangeDone.total) {
+        scrapeLog(
+          `Página ${pageNo} concluída · Resultados ${rangeDone.from}-${rangeDone.to} de ${rangeDone.total} — fim da lista.`,
+        );
+        break;
+      }
       scrapeLog(`Página ${pageNo} concluída · avançando paginação…`);
       if (pageNo >= maxPages) {
         scrapeLog(`Limite de ${maxPages} páginas atingido — parei a paginação.`);
@@ -1128,7 +1278,6 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         break;
       }
       if (pageBuckets.length <= bucketsBeforeNext) {
-        // gotoNext disse ok mas sem bucket — não deve acontecer; evita reprocessar a mesma página
         scrapeLog(
           "Paginação: avanço confirmado sem bucket novo — encerrando por segurança.",
         );
