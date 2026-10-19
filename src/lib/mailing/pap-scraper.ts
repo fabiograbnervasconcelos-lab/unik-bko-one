@@ -787,6 +787,98 @@ async function readVendasFromResponse(
   }
 }
 
+type VendasApiCursor = {
+  prevUrl: string | null;
+  lastUrl: string | null;
+  preferManual: boolean;
+  /** Próximo "from" 1-based a buscar (independente da UI quando preferManual). */
+  nextFrom: number | null;
+};
+
+/** Infere a próxima URL comparando dois GETs sucessivos (qual query param subiu). */
+function inferNextVendasUrl(prevUrl: string | null, lastUrl: string | null): string | null {
+  if (!prevUrl || !lastUrl) return null;
+  try {
+    const a = new URL(prevUrl);
+    const b = new URL(lastUrl);
+    const next = new URL(lastUrl);
+    let bumped = false;
+    for (const [key, value] of b.searchParams.entries()) {
+      const prev = a.searchParams.get(key);
+      if (prev == null || prev === value) continue;
+      if (!/^-?\d+$/.test(prev) || !/^-?\d+$/.test(value)) continue;
+      const diff = Number(value) - Number(prev);
+      if (diff === 0) continue;
+      next.searchParams.set(key, String(Number(value) + diff));
+      bumped = true;
+    }
+    return bumped ? next.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Fallback: ajusta page/offset a partir do "from" do Resultados (1-based). */
+function buildVendasUrlForFrom(lastUrl: string, from1: number, pageSize: number): string | null {
+  try {
+    const u = new URL(lastUrl);
+    const page0 = Math.max(0, Math.floor((from1 - 1) / Math.max(1, pageSize)));
+    const page1 = page0 + 1;
+    const pageKeys = [
+      "page",
+      "pagina",
+      "pageNumber",
+      "pageIndex",
+      "numeroPagina",
+      "p",
+      "currentPage",
+    ];
+    for (const k of pageKeys) {
+      if (!u.searchParams.has(k)) continue;
+      const cur = Number(u.searchParams.get(k));
+      u.searchParams.set(k, String(cur === 0 || cur < page1 ? page0 : page1));
+      return u.toString();
+    }
+    for (const k of ["offset", "skip", "from", "start", "inicio"]) {
+      if (!u.searchParams.has(k)) continue;
+      u.searchParams.set(k, String(from1 - 1));
+      return u.toString();
+    }
+    u.searchParams.set("page", String(page0));
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchVendasByUrl(
+  page: Page,
+  url: string,
+): Promise<{ vendas: Record<string, unknown>[]; total?: number } | null> {
+  scrapeLog(`Paginação: fetch manual da API…`);
+  try {
+    const res = await page.request.get(url, { timeout: 60000 });
+    if (!res.ok()) {
+      scrapeLog(`Paginação: fetch manual HTTP ${res.status()}`);
+      return null;
+    }
+    const json = (await res.json()) as {
+      data?: { vendas?: Record<string, unknown>[]; total?: number };
+    };
+    const vendas = json?.data?.vendas;
+    if (!Array.isArray(vendas)) return null;
+    scrapeLog(
+      `API vendas (manual): ${vendas.length} registro(s)${typeof json?.data?.total === "number" ? ` · total=${json.data.total}` : ""}.`,
+    );
+    return { vendas, total: json?.data?.total };
+  } catch (err) {
+    scrapeLog(
+      `Paginação: fetch manual falhou (${err instanceof Error ? err.message : String(err)}).`,
+    );
+    return null;
+  }
+}
+
 /** Lê "Resultados: 526-540 de 1202" na barra de paginação. */
 async function readResultadosRange(
   page: Page,
@@ -843,16 +935,49 @@ async function tryIncreaseRowsPerPage(page: Page) {
   }
 }
 
+async function pushManualVendasPage(
+  page: Page,
+  pageBuckets: Array<Record<string, unknown>[]>,
+  cursor: VendasApiCursor,
+  targetFrom: number,
+  pageSize: number,
+): Promise<boolean> {
+  const nextUrl =
+    inferNextVendasUrl(cursor.prevUrl, cursor.lastUrl) ||
+    (cursor.lastUrl
+      ? buildVendasUrlForFrom(cursor.lastUrl, targetFrom, pageSize)
+      : null);
+  if (!nextUrl) {
+    scrapeLog("Paginação: sem URL de /vendas para fetch manual.");
+    return false;
+  }
+  const parsed = await fetchVendasByUrl(page, nextUrl);
+  if (!parsed) return false;
+  if (!parsed.vendas.length) {
+    scrapeLog("Paginação: fetch manual voltou 0 vendas — fim da lista.");
+    return false;
+  }
+  cursor.prevUrl = cursor.lastUrl;
+  cursor.lastUrl = nextUrl;
+  cursor.preferManual = true;
+  cursor.nextFrom = targetFrom + parsed.vendas.length;
+  pageBuckets.push(parsed.vendas);
+  scrapeLog(
+    `Página OK via fetch manual · ${targetFrom}-${targetFrom + parsed.vendas.length - 1} · ${parsed.vendas.length} linhas`,
+  );
+  return true;
+}
+
 /**
- * Clica > e exige NOVA captura da API /vendas.
- * Se a UI avançar o "Resultados" sem API (bug PAP/MUI), volta uma página e retenta.
- * Só retorna false no fim real da lista (seta off ou to >= total).
+ * Avança página: clica > e espera /vendas; se a UI andar sem API, busca a
+ * próxima página direto na API (URL inferida dos GETs anteriores).
  */
 async function gotoNextResultsPage(
   page: Page,
   pageBuckets: Array<Record<string, unknown>[]>,
+  cursor: VendasApiCursor,
 ): Promise<boolean> {
-  await humanPause(500, 900);
+  await humanPause(400, 700);
 
   const rangeBefore = await readResultadosRange(page);
   if (rangeBefore) {
@@ -865,21 +990,31 @@ async function gotoNextResultsPage(
     }
   }
 
-  for (let attempt = 1; attempt <= 5; attempt++) {
+  const pageSize = rangeBefore ? Math.max(1, rangeBefore.to - rangeBefore.from + 1) : 15;
+  const nextFrom =
+    cursor.nextFrom ||
+    (rangeBefore ? rangeBefore.to + 1 : pageSize + 1);
+
+  // Depois que o clique da UI falha uma vez, prefere API direta (mais estável).
+  if (cursor.preferManual && cursor.lastUrl) {
+    assertNotCancelled();
+    const ok = await pushManualVendasPage(page, pageBuckets, cursor, nextFrom, pageSize);
+    if (ok) return true;
+    scrapeLog("Paginação: fetch manual falhou — tentando clique > de novo…");
+    cursor.preferManual = false;
+  }
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
     assertNotCancelled();
     const nextBtn = await resolveNextPageButton(page);
     if (!nextBtn) {
-      scrapeLog("Botão próxima página (>) não encontrado.");
-      return false;
+      scrapeLog("Botão próxima página (>) não encontrado — tentando fetch manual…");
+      return pushManualVendasPage(page, pageBuckets, cursor, nextFrom, pageSize);
     }
-
     const label = (
       (await nextBtn.getAttribute("aria-label").catch(() => "")) || ""
     ).toLowerCase();
-    if (/last|última|ultima/.test(label)) {
-      scrapeLog(`Paginação: recusei clique em "${label}" — preciso da seta >.`);
-      return false;
-    }
+    if (/last|última|ultima/.test(label)) return false;
     if (await nextBtn.isDisabled().catch(() => true)) {
       scrapeLog("Botão próxima página (>) desabilitado — fim da lista.");
       return false;
@@ -888,91 +1023,66 @@ async function gotoNextResultsPage(
     const bucketsBefore = pageBuckets.length;
     const rangeAtClick = (await readResultadosRange(page)) || rangeBefore;
     scrapeLog(
-      `Clicando seta próxima página (>) ${label ? `[${label}] ` : ""}— tentativa ${attempt}/5…`,
+      `Clicando seta próxima página (>) ${label ? `[${label}] ` : ""}— tentativa ${attempt}/3…`,
     );
 
     const responsePromise = page
-      .waitForResponse((res) => isVendasListResponse(res), { timeout: 45000 })
+      .waitForResponse((res) => isVendasListResponse(res), { timeout: 35000 })
       .catch(() => null);
-
     await nextBtn.scrollIntoViewIfNeeded().catch(() => undefined);
     await nextBtn.click({ force: true });
-
-    // Espera bucket novo OU (no máximo) mudança de Resultados — mas só sucesso com API
-    const deadline = Date.now() + 45000;
-    let res = await responsePromise;
-    while (Date.now() < deadline && pageBuckets.length <= bucketsBefore) {
-      if (res) break;
-      await sleep(250);
-    }
-    for (let w = 0; w < 20 && pageBuckets.length <= bucketsBefore; w++) {
+    const res = await responsePromise;
+    for (let w = 0; w < 25 && pageBuckets.length <= bucketsBefore; w++) {
       await sleep(200);
     }
 
     if (pageBuckets.length > bucketsBefore) {
       const rangeAfter = await readResultadosRange(page);
       if (rangeAfter) {
+        cursor.nextFrom = rangeAfter.to + 1;
         scrapeLog(
           `Página OK via API · Resultados ${rangeAfter.from}-${rangeAfter.to} de ${rangeAfter.total}`,
         );
+      } else {
+        cursor.nextFrom = nextFrom + pageSize;
       }
-      await humanPause(300, 600);
       return true;
     }
 
     if (res) {
       const parsed = await readVendasFromResponse(res);
-      if (parsed) {
-        if (!parsed.vendas.length) {
-          scrapeLog(
-            `Paginação: API voltou 0 vendas${parsed.total != null ? ` (total=${parsed.total})` : ""} — fim da lista.`,
-          );
-          return false;
-        }
+      if (parsed?.vendas.length) {
         pageBuckets.push(parsed.vendas);
+        cursor.nextFrom = nextFrom + parsed.vendas.length;
         scrapeLog(
-          `API vendas capturada (via waitForResponse): ${parsed.vendas.length} registro(s)${parsed.total != null ? ` · total=${parsed.total}` : ""}.`,
+          `API vendas capturada (via waitForResponse): ${parsed.vendas.length} registro(s).`,
         );
-        await humanPause(300, 600);
         return true;
+      }
+      if (parsed && !parsed.vendas.length) {
+        scrapeLog("Paginação: API voltou 0 vendas — fim da lista.");
+        return false;
       }
     }
 
     const rangeAfter = await readResultadosRange(page);
-    const uiMoved =
-      rangeAtClick &&
-      rangeAfter &&
-      rangeAfter.from > rangeAtClick.from;
-
-    if (uiMoved) {
-      scrapeLog(
-        `Paginação: UI foi para ${rangeAfter!.from}-${rangeAfter!.to} sem API — recuperando (voltar < e avançar de novo)…`,
-      );
-      const prevBtn = await resolvePrevPageButton(page);
-      if (prevBtn && !(await prevBtn.isDisabled().catch(() => true))) {
-        const recoverBuckets = pageBuckets.length;
-        const recoverWait = page
-          .waitForResponse((r) => isVendasListResponse(r), { timeout: 30000 })
-          .catch(() => null);
-        await prevBtn.click({ force: true });
-        await recoverWait;
-        for (let w = 0; w < 30 && pageBuckets.length <= recoverBuckets; w++) {
-          await sleep(200);
-        }
-        // descarta bucket da página anterior se veio — não processar de novo no loop
-        if (pageBuckets.length > recoverBuckets) {
-          pageBuckets.length = recoverBuckets;
-          scrapeLog("Paginação: voltei à página anterior; retento > com API.");
-        }
-      }
-      await sleep(1500);
-      continue;
-    }
+    const targetFrom =
+      rangeAfter && rangeAtClick && rangeAfter.from > rangeAtClick.from
+        ? rangeAfter.from
+        : nextFrom;
 
     scrapeLog(
-      `Paginação: tentativa ${attempt}/5 sem API nova${rangeAfter ? ` (UI ${rangeAfter.from}-${rangeAfter.to}/${rangeAfter.total})` : ""}.`,
+      `Paginação: clique sem API útil${rangeAfter ? ` (UI ${rangeAfter.from}-${rangeAfter.to}/${rangeAfter.total})` : ""} — fetch manual…`,
     );
-    await sleep(1500);
+    const ok = await pushManualVendasPage(
+      page,
+      pageBuckets,
+      cursor,
+      targetFrom,
+      pageSize,
+    );
+    if (ok) return true;
+    await sleep(1000);
   }
 
   const finalRange = await readResultadosRange(page);
@@ -980,37 +1090,16 @@ async function gotoNextResultsPage(
     scrapeLog("Fim da lista pelo contador Resultados.");
     return false;
   }
-  const nextBtn = await resolveNextPageButton(page);
-  if (!nextBtn || (await nextBtn.isDisabled().catch(() => true))) {
-    scrapeLog("Botão > desabilitado após retries — fim da lista.");
-    return false;
-  }
-
-  // Ainda há páginas: NÃO desistir — uma última tentativa com wait 90s
-  scrapeLog("Paginação: última tentativa longa (90s) com seta > ainda ativa…");
-  const bucketsBefore = pageBuckets.length;
-  const responsePromise = page
-    .waitForResponse((res) => isVendasListResponse(res), { timeout: 90000 })
-    .catch(() => null);
-  await nextBtn.click({ force: true });
-  const res = await responsePromise;
-  for (let w = 0; w < 50 && pageBuckets.length <= bucketsBefore; w++) {
-    await sleep(200);
-  }
-  if (pageBuckets.length > bucketsBefore) return true;
-  if (res) {
-    const parsed = await readVendasFromResponse(res);
-    if (parsed?.vendas.length) {
-      pageBuckets.push(parsed.vendas);
-      scrapeLog(
-        `API vendas capturada (retry final): ${parsed.vendas.length} registro(s).`,
-      );
-      return true;
-    }
-  }
-  scrapeLog(
-    "Paginação: falhou obter API da próxima página — mantendo job ativo pedirá reexecução do restante.",
+  // Última cartada: fetch manual mesmo sem clique
+  const ok = await pushManualVendasPage(
+    page,
+    pageBuckets,
+    cursor,
+    finalRange ? finalRange.to + 1 : nextFrom,
+    pageSize,
   );
+  if (ok) return true;
+  scrapeLog("Paginação: não consegui a próxima página da API.");
   return false;
 }
 
@@ -1075,6 +1164,12 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
 
     const pageBuckets: Array<Record<string, unknown>[]> = [];
     let listTotal: number | null = null;
+    const vendasCursor: VendasApiCursor = {
+      prevUrl: null,
+      lastUrl: null,
+      preferManual: false,
+      nextFrom: null,
+    };
     page.on("response", async (res) => {
       try {
         if (!isVendasListUrl(res.url())) return;
@@ -1082,10 +1177,15 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         if (method !== "GET" && method !== "POST") return;
         if (res.status() < 200 || res.status() >= 300) {
           scrapeLog(
-            `API vendas HTTP ${res.status()} ${method} — ${res.url().slice(0, 120)}`,
+            `API vendas HTTP ${res.status()} ${method} — ${res.url().slice(0, 160)}`,
           );
           return;
         }
+        const url = res.url();
+        if (vendasCursor.lastUrl && vendasCursor.lastUrl !== url) {
+          vendasCursor.prevUrl = vendasCursor.lastUrl;
+        }
+        vendasCursor.lastUrl = url;
         const json = (await res.json()) as {
           data?: { vendas?: Record<string, unknown>[]; total?: number };
         };
@@ -1186,6 +1286,11 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
           ? pageBuckets[pageBuckets.length - 1] || []
           : pageBuckets[pageBuckets.length - 1] || [];
       consumedBuckets = pageBuckets.length;
+      if (rangeNow) {
+        vendasCursor.nextFrom = rangeNow.to + 1;
+      } else if (latest.length && vendasCursor.nextFrom == null) {
+        vendasCursor.nextFrom = latest.length + 1;
+      }
       scrapeLog(
         `Página ${pageNo}: ${latest.length} linha(s) na captura da API${listTotal != null ? ` · meta total=${listTotal}` : ""}.`,
       );
@@ -1272,7 +1377,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         break;
       }
       const bucketsBeforeNext = pageBuckets.length;
-      const moved = await gotoNextResultsPage(page, pageBuckets);
+      const moved = await gotoNextResultsPage(page, pageBuckets, vendasCursor);
       if (!moved) {
         scrapeLog("Fim da paginação.");
         break;
