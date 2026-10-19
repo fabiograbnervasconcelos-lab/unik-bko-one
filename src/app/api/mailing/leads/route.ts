@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { getSessionUser } from "@/lib/mailing/auth";
+import { canDistribute, getSessionUser } from "@/lib/mailing/auth";
 import { filterLeads, moveLeadQueue, queueCounts } from "@/lib/mailing/queues";
-import { loadLeads, loadUsers } from "@/lib/mailing/store";
+import { loadLeads, loadUsers, updateLeads } from "@/lib/mailing/store";
 import type { QueueStatus } from "@/lib/mailing/types";
 
 export const dynamic = "force-dynamic";
@@ -66,4 +66,36 @@ export async function PATCH(request: Request) {
       { status: 400 },
     );
   }
+}
+
+/** Exclui leads selecionados (remoção permanente do mailing). */
+export async function DELETE(request: Request) {
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+  if (!canDistribute(user.role)) {
+    return NextResponse.json({ error: "Sem permissão para excluir leads." }, { status: 403 });
+  }
+
+  const body = (await request.json().catch(() => null)) as {
+    leadIds?: string[];
+  } | null;
+  const ids = Array.isArray(body?.leadIds)
+    ? [...new Set(body!.leadIds.map((id) => String(id || "").trim()).filter(Boolean))]
+    : [];
+  if (!ids.length) {
+    return NextResponse.json({ error: "Informe leadIds para excluir." }, { status: 400 });
+  }
+
+  const idSet = new Set(ids);
+  let removed = 0;
+  await updateLeads((leads) => {
+    const next = leads.filter((lead) => {
+      if (!idSet.has(lead.id)) return true;
+      removed += 1;
+      return false;
+    });
+    return next;
+  });
+
+  return NextResponse.json({ ok: true, removed, requested: ids.length });
 }

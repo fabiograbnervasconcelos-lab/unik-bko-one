@@ -13,6 +13,7 @@ import {
   upsertLeadByKey,
   defaultScrapeProgress,
 } from "@/lib/mailing/store";
+import { resolveMailingPlanLabel } from "@/lib/mailing/plan-map";
 import type { LeadPartData, MailingLead, ScrapeProgress } from "@/lib/mailing/types";
 import { ensureDataDirs, MAILING_LIVE_DIR, MAILING_LIVE_SHOT } from "@/lib/paths";
 
@@ -664,10 +665,28 @@ function mapVendaToLead(
     pdv: String(vendedor.pdv || ""),
   };
 
+  const planoRaw = String(
+    produtos.comboSolicitado || produtos.comboSugerido || venda.plano || "",
+  );
+  const velocidadeRaw = String(banda.velocidade || "");
+  const valorPlanoRaw = String(
+    produtos.valorPlano ||
+      produtos.valor ||
+      (produtos.preco as string | undefined) ||
+      "",
+  );
+  // Regra comercial: valor → 600 mega / 800 mega / 1GB
+  const planLabel = resolveMailingPlanLabel({
+    valorPlano: valorPlanoRaw,
+    plano: planoRaw,
+    velocidade: velocidadeRaw,
+  });
+
   const planData: LeadPartData = {
-    plano: String(produtos.comboSolicitado || produtos.comboSugerido || venda.plano || ""),
-    velocidade: String(banda.velocidade || ""),
-    valorPlano: String(produtos.valorPlano || ""),
+    plano: planLabel || planoRaw,
+    planoOriginal: planoRaw,
+    velocidade: planLabel || velocidadeRaw,
+    valorPlano: valorPlanoRaw,
     taxaHabilitacao: String(produtos.taxaHabilitacao || ""),
     tecnologia: String(produtos.tecnologiaCombo || banda.tipoProduto || ""),
     formaPagamento: String(
@@ -686,7 +705,7 @@ function mapVendaToLead(
     city: part2.cidade || undefined,
     state: part2.uf || undefined,
     zip: part2.cep || undefined,
-    plan: planData.plano || undefined,
+    plan: planLabel || planoRaw || undefined,
     saleType,
     saleDate: part1.dataCriacao || undefined,
     papId: String(venda._id || venda.numeroPedido || ""),

@@ -224,6 +224,37 @@ export function MailingPanel() {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
+  function selectAllVisible() {
+    setSelected(leads.map((l) => l.id));
+  }
+
+  function clearSelection() {
+    setSelected([]);
+  }
+
+  async function excludeSelected() {
+    if (!selected.length) return;
+    const ok = window.confirm(
+      `Excluir permanentemente ${selected.length} lead(s) selecionado(s)? Essa ação não pode ser desfeita.`,
+    );
+    if (!ok) return;
+    setMessage("");
+    const res = await fetch("/api/mailing/leads", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ leadIds: selected }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setMessage(data.error || "Falha ao excluir leads.");
+      return;
+    }
+    setMessage(`Excluídos: ${data.removed ?? selected.length}`);
+    setSelected([]);
+    await refreshLeads();
+    await refreshMe();
+  }
+
   async function transfer(ids: string[]) {
     setMessage("");
     const res = await fetch("/api/mailing/transfer", {
@@ -661,11 +692,57 @@ export function MailingPanel() {
               </Button>
             </div>
           </div>
+          {isManager ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!leads.length}
+                onClick={selectAllVisible}
+              >
+                Selecionar todos ({leads.length})
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!selected.length}
+                onClick={clearSelection}
+              >
+                Limpar seleção
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                disabled={!selected.length}
+                onClick={() => void excludeSelected()}
+              >
+                Excluir selecionados ({selected.length})
+              </Button>
+              <span className="text-xs text-white/50">
+                Marque manualmente ou use selecionar todos para remover clientes que não quer mais.
+              </span>
+            </div>
+          ) : null}
           <div className="overflow-x-auto">
             <table className="mailing-table w-full text-left text-sm">
               <thead>
                 <tr>
-                  {isManager && queue === "transferir" ? <th></th> : null}
+                  {isManager ? (
+                    <th className="w-10">
+                      <input
+                        type="checkbox"
+                        aria-label="Selecionar todos"
+                        checked={Boolean(leads.length) && selected.length === leads.length}
+                        onChange={(e) => {
+                          if (e.target.checked) selectAllVisible();
+                          else clearSelection();
+                        }}
+                      />
+                    </th>
+                  ) : null}
                   <th>Tipo</th>
                   <th>Pedido</th>
                   <th>Nome</th>
@@ -678,7 +755,7 @@ export function MailingPanel() {
               <tbody>
                 {leads.map((lead) => (
                   <tr key={lead.id}>
-                    {isManager && queue === "transferir" ? (
+                    {isManager ? (
                       <td>
                         <input
                           type="checkbox"
@@ -747,7 +824,10 @@ export function MailingPanel() {
                 ))}
                 {!leads.length ? (
                   <tr>
-                    <td colSpan={7} className="py-8 text-center text-white/50">
+                    <td
+                      colSpan={isManager ? 8 : 7}
+                      className="py-8 text-center text-white/50"
+                    >
                       Nenhum lead nesta fila.
                     </td>
                   </tr>
