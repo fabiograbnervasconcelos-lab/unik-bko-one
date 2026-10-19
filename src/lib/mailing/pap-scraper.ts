@@ -13,6 +13,7 @@ import {
   upsertLeadByKey,
   defaultScrapeProgress,
 } from "@/lib/mailing/store";
+import { resolveMailingPlanLabel } from "@/lib/mailing/plan-map";
 import type { LeadPartData, MailingLead, ScrapeProgress } from "@/lib/mailing/types";
 import { ensureDataDirs, MAILING_LIVE_DIR, MAILING_LIVE_SHOT } from "@/lib/paths";
 
@@ -151,7 +152,8 @@ function scrapeLog(line: string, patch: Partial<ScrapeProgress> = {}) {
     second: "2-digit",
   });
   const entry = `[${stamp}] ${line}`;
-  const logs = [...(current.logs || []), entry].slice(-300);
+  // Listas longas (centenas de páginas) — manter histórico maior no painel
+  const logs = [...(current.logs || []), entry].slice(-5000);
   const next: ScrapeProgress = {
     ...current,
     ...patch,
@@ -318,18 +320,46 @@ async function openFilters(page: Page) {
 }
 
 async function selectTipo(page: Page, tipoLabel: "Interesse" | "Venda") {
-  await page
+  const control = page
     .locator(".MuiDrawer-paper .filter-select-pdv div[class*='-control']")
-    .first()
-    .click({ force: true });
+    .first();
+  const current = (
+    (await page
+      .locator(".MuiDrawer-paper .filter-select-pdv div[class*='-singleValue']")
+      .first()
+      .innerText()
+      .catch(() => "")) || ""
+  ).trim();
+  if (new RegExp(`^${tipoLabel}$`, "i").test(current)) {
+    scrapeLog(`Tipo já está em ${tipoLabel} — sem reabrir o select.`);
+    return;
+  }
+
+  await control.click({ force: true });
   await humanPause(700, 1100);
-  await page.getByText(tipoLabel, { exact: true }).click({ force: true });
+  // Clica só a opção do menu (não o singleValue já visível — evita strict mode)
+  const menuOpt = page
+    .locator(
+      "div[id*='react-select'][id*='option'], div[class*='-menu'] div[class*='-option'], div[class*='-option']",
+    )
+    .filter({ hasText: new RegExp(`^${tipoLabel}$`, "i") })
+    .first();
+  if (!(await menuOpt.count())) {
+    throw new Error(`Opção Tipo = ${tipoLabel} não apareceu no menu.`);
+  }
+  await menuOpt.click({ force: true });
   await humanPause(1200, 1800);
-  const text = await page.locator(".MuiDrawer-paper").innerText();
-  const ok =
-    tipoLabel === "Interesse" ? /interesse/i.test(text) : /\bvenda\b/i.test(text);
-  if (!ok) {
-    throw new Error(`Não foi possível selecionar Tipo = ${tipoLabel}.`);
+  const selected = (
+    (await page
+      .locator(".MuiDrawer-paper .filter-select-pdv div[class*='-singleValue']")
+      .first()
+      .innerText()
+      .catch(() => "")) || ""
+  ).trim();
+  if (!new RegExp(`^${tipoLabel}$`, "i").test(selected)) {
+    throw new Error(
+      `Não foi possível selecionar Tipo = ${tipoLabel} (ficou "${selected || "vazio"}").`,
+    );
   }
 }
 
@@ -364,11 +394,121 @@ async function selectStatusPrimario(page: Page, label: string) {
 
 async function readOpenCalendarMonthYear(page: Page) {
   const header = page.locator(
-    ".MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-switchHeader p",
+    ".MuiPopover-paper .MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-switchHeader p",
   );
   if (!(await header.count())) return null;
   const text = (await header.first().innerText().catch(() => "")) || "";
   return parsePtMonthYear(text);
+}
+
+const DATE_DAY_SELECTOR =
+  ".MuiPopover-paper button.MuiPickersDay-day:not(.MuiPickersDay-hidden), .MuiPickersBasePicker-container button.MuiPickersDay-day:not(.MuiPickersDay-hidden)";
+
+async function ensureFiltersOpen(page: Page) {
+  const drawer = page.locator(".MuiDrawer-paper");
+  if (await drawer.isVisible().catch(() => false)) return;
+  scrapeLog("Drawer de filtros fechou — reabrindo…");
+  await openFilters(page);
+}
+
+/** Fecha só o popover do DatePicker. NÃO usa Escape no escuro — isso fecha o drawer. */
+async function closeAnyDatePopover(page: Page) {
+  const openDays = page.locator(DATE_DAY_SELECTOR);
+  if (!(await openDays.count())) return;
+  // Backdrop transparente do MUI Popover
+  const backdrop = page.locator(".MuiPopover-root > div[aria-hidden='true'], .MuiBackdrop-root").first();
+  if (await backdrop.count()) {
+    await backdrop.click({ force: true }).catch(() => undefined);
+    await sleep(250);
+  }
+  if (await openDays.first().isVisible().catch(() => false)) {
+    // Escape só com popover aberto (fecha o picker, não o drawer)
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await sleep(250);
+  }
+  await ensureFiltersOpen(page);
+}
+
+async function openDatePopover(page: Page, root: ReturnType<Page["locator"]>) {
+  await ensureFiltersOpen(page);
+  await closeAnyDatePopover(page);
+  await root.scrollIntoViewIfNeeded().catch(() => undefined);
+
+  const calendarBtn = root.locator(".MuiInputAdornment-root button").first();
+  const strategies: Array<() => Promise<void>> = [
+    async () => {
+      await calendarBtn.click({ force: true });
+    },
+    async () => {
+      await root.locator("input").first().click({ force: true });
+      await humanPause(200, 350);
+      await calendarBtn.click({ force: true });
+    },
+    async () => {
+      // Clique no SVG do calendário
+      await root.locator(".MuiInputAdornment-root svg").first().click({ force: true });
+    },
+  ];
+
+  let lastErr: unknown;
+  for (let i = 0; i < strategies.length; i++) {
+    try {
+      await ensureFiltersOpen(page);
+      await strategies[i]!();
+      await page.waitForSelector(DATE_DAY_SELECTOR, { state: "visible", timeout: 6000 });
+      await humanPause(350, 600);
+      return;
+    } catch (err) {
+      lastErr = err;
+      scrapeLog(`Calendário: abertura tentativa ${i + 1}/${strategies.length} falhou — retry…`);
+      await closeAnyDatePopover(page);
+      await humanPause(200, 400);
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("Não foi possível abrir o calendário do DatePicker.");
+}
+
+async function setDateByTyping(
+  page: Page,
+  root: ReturnType<Page["locator"]>,
+  expected: string,
+) {
+  await ensureFiltersOpen(page);
+  await closeAnyDatePopover(page);
+  const input = root.locator("input").first();
+  await input.scrollIntoViewIfNeeded().catch(() => undefined);
+  await input.click({ force: true });
+  await humanPause(200, 400);
+  // KeyboardDatePicker do MUI v4: setter nativo + eventos React
+  await input.evaluate((el, v) => {
+    const node = el as HTMLInputElement;
+    node.focus();
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    setter?.call(node, "");
+    node.dispatchEvent(new Event("input", { bubbles: true }));
+    setter?.call(node, v);
+    node.dispatchEvent(new Event("input", { bubbles: true }));
+    node.dispatchEvent(new Event("change", { bubbles: true }));
+    node.blur();
+  }, expected);
+  await humanPause(400, 700);
+  let value = (await input.inputValue()).trim();
+  if (value === expected) return value;
+
+  // Fallback: digitar caractere a caractere (máscara dd/mm/yyyy)
+  await input.click({ force: true });
+  await page.keyboard.press("Control+a");
+  await sleep(80);
+  await page.keyboard.press("Backspace");
+  await sleep(100);
+  await input.pressSequentially(expected, { delay: 45 });
+  await page.keyboard.press("Tab");
+  await humanPause(500, 800);
+  value = (await input.inputValue()).trim();
+  await ensureFiltersOpen(page);
+  return value;
 }
 
 /**
@@ -381,81 +521,84 @@ async function pickCalendarDate(
   parts: { day: number; month: number; year: number },
 ) {
   const expected = formatBrDate(parts);
+  await ensureFiltersOpen(page);
   const root = page
     .locator(".MuiDrawer-paper .MuiTextField-root")
     .filter({ has: page.locator(`label:text-is("${label}")`) });
-
-  // 1) Tenta digitar a data completa no input (mais fiel ao que o usuário colocou)
   const input = root.locator("input").first();
-  await input.click({ force: true });
-  await humanPause(200, 400);
-  await input.fill("");
-  await input.pressSequentially(expected, { delay: 35 });
-  await page.keyboard.press("Tab");
-  await humanPause(500, 800);
-  let value = await input.inputValue();
-  if (value.trim() === expected) {
-    scrapeLog(`Campo ${label} digitado: ${value}`);
-    return value;
+
+  // 1) Digitar primeiro (sem Escape cego — senão o drawer fecha)
+  scrapeLog(`Definindo ${label} = ${expected}…`);
+  const typed = await setDateByTyping(page, root, expected);
+  if (typed === expected) {
+    scrapeLog(`Campo ${label} digitado: ${typed}`);
+    return typed;
   }
+  scrapeLog(
+    `Campo ${label} não aceitou digitação (${typed || "vazio"}) — usando calendário…`,
+  );
 
   // 2) Fallback: calendário com navegação de mês/ano
-  scrapeLog(
-    `Campo ${label} não aceitou digitação (${value || "vazio"}) — usando calendário até ${expected}…`,
-  );
-  await root.locator("button").first().click({ force: true });
-  await page.waitForSelector("button.MuiPickersDay-day:not(.MuiPickersDay-hidden)", {
-    timeout: 10000,
-  });
-  await humanPause(400, 700);
+  try {
+    await openDatePopover(page, root);
 
-  const targetIndex = parts.year * 12 + (parts.month - 1);
-  for (let i = 0; i < 36; i++) {
-    assertNotCancelled();
-    const current = await readOpenCalendarMonthYear(page);
-    if (!current) break;
-    const currentIndex = current.year * 12 + (current.month - 1);
-    if (currentIndex === targetIndex) break;
+    const targetIndex = parts.year * 12 + (parts.month - 1);
+    for (let i = 0; i < 36; i++) {
+      assertNotCancelled();
+      const current = await readOpenCalendarMonthYear(page);
+      if (!current) break;
+      const currentIndex = current.year * 12 + (current.month - 1);
+      if (currentIndex === targetIndex) break;
 
-    const buttons = page.locator(
-      ".MuiPickersCalendarHeader-switchHeader button.MuiPickersCalendarHeader-iconButton",
-    );
-    const goPrev = currentIndex > targetIndex;
-    const btn = goPrev ? buttons.first() : buttons.nth(1);
-    if (await btn.isDisabled().catch(() => true)) {
+      const buttons = page.locator(
+        ".MuiPopover-paper .MuiPickersCalendarHeader-switchHeader button.MuiPickersCalendarHeader-iconButton, .MuiPickersCalendarHeader-switchHeader button.MuiPickersCalendarHeader-iconButton",
+      );
+      const goPrev = currentIndex > targetIndex;
+      const btn = goPrev ? buttons.first() : buttons.nth(1);
+      if (await btn.isDisabled().catch(() => true)) {
+        throw new Error(
+          `Calendário ${label}: não foi possível navegar até ${expected} (mês aberto: ${current.month}/${current.year}).`,
+        );
+      }
+      scrapeLog(
+        `Calendário ${label}: ${MONTHS_PT[current.month - 1]} ${current.year} → ${goPrev ? "mês anterior" : "próximo mês"}`,
+      );
+      await btn.click({ force: true });
+      await humanPause(350, 600);
+    }
+
+    const opened = await readOpenCalendarMonthYear(page);
+    if (!opened || opened.month !== parts.month || opened.year !== parts.year) {
       throw new Error(
-        `Calendário ${label}: não foi possível navegar até ${expected} (mês aberto: ${current.month}/${current.year}).`,
+        `Calendário ${label}: esperado ${parts.month}/${parts.year}, aberto ${opened?.month || "?"}/${opened?.year || "?"}.`,
       );
     }
-    scrapeLog(
-      `Calendário ${label}: ${MONTHS_PT[current.month - 1]} ${current.year} → ${goPrev ? "mês anterior" : "próximo mês"}`,
-    );
-    await btn.click({ force: true });
-    await humanPause(350, 600);
-  }
 
-  const opened = await readOpenCalendarMonthYear(page);
-  if (!opened || opened.month !== parts.month || opened.year !== parts.year) {
+    await page
+      .locator(
+        ".MuiPopover-paper button.MuiPickersDay-day:not(.MuiPickersDay-hidden):not(.MuiPickersDay-dayDisabled)",
+      )
+      .filter({ hasText: new RegExp(`^${parts.day}$`) })
+      .first()
+      .click({ force: true });
+    await humanPause(800, 1300);
+    await ensureFiltersOpen(page);
+
+    const value = (await input.inputValue()).trim();
+    if (value === expected) {
+      scrapeLog(`Campo ${label} confirmado no calendário: ${value}`);
+      return value;
+    }
+    scrapeLog(`Calendário ${label} deixou valor "${value || "vazio"}" (esperado ${expected}).`);
     throw new Error(
-      `Calendário ${label}: esperado ${parts.month}/${parts.year}, aberto ${opened?.month || "?"}/${opened?.year || "?"}.`,
+      `Data ${label} divergente: esperado ${expected}, campo ficou ${value || "(vazio)"}.`,
     );
+  } catch (err) {
+    await closeAnyDatePopover(page);
+    throw err instanceof Error
+      ? err
+      : new Error(`Data ${label} não aplicada. Esperado ${expected}.`);
   }
-
-  await page
-    .locator("button.MuiPickersDay-day:not(.MuiPickersDay-hidden):not(.MuiPickersDay-dayDisabled)")
-    .filter({ hasText: new RegExp(`^${parts.day}$`) })
-    .first()
-    .click({ force: true });
-  await humanPause(800, 1300);
-
-  value = await input.inputValue();
-  if (value.trim() !== expected) {
-    throw new Error(
-      `Data ${label} divergente: digitado/esperado ${expected}, campo ficou ${value || "(vazio)"}.`,
-    );
-  }
-  scrapeLog(`Campo ${label} confirmado no calendário: ${value}`);
-  return value;
 }
 
 async function applyFilter(page: Page) {
@@ -523,10 +666,28 @@ function mapVendaToLead(
     pdv: String(vendedor.pdv || ""),
   };
 
+  const planoRaw = String(
+    produtos.comboSolicitado || produtos.comboSugerido || venda.plano || "",
+  );
+  const velocidadeRaw = String(banda.velocidade || "");
+  const valorPlanoRaw = String(
+    produtos.valorPlano ||
+      produtos.valor ||
+      (produtos.preco as string | undefined) ||
+      "",
+  );
+  // Regra comercial: valor → 600 mega / 800 mega / 1GB
+  const planLabel = resolveMailingPlanLabel({
+    valorPlano: valorPlanoRaw,
+    plano: planoRaw,
+    velocidade: velocidadeRaw,
+  });
+
   const planData: LeadPartData = {
-    plano: String(produtos.comboSolicitado || produtos.comboSugerido || venda.plano || ""),
-    velocidade: String(banda.velocidade || ""),
-    valorPlano: String(produtos.valorPlano || ""),
+    plano: planLabel || planoRaw,
+    planoOriginal: planoRaw,
+    velocidade: planLabel || velocidadeRaw,
+    valorPlano: valorPlanoRaw,
     taxaHabilitacao: String(produtos.taxaHabilitacao || ""),
     tecnologia: String(produtos.tecnologiaCombo || banda.tipoProduto || ""),
     formaPagamento: String(
@@ -545,7 +706,7 @@ function mapVendaToLead(
     city: part2.cidade || undefined,
     state: part2.uf || undefined,
     zip: part2.cep || undefined,
-    plan: planData.plano || undefined,
+    plan: planLabel || planoRaw || undefined,
     saleType,
     saleDate: part1.dataCriacao || undefined,
     papId: String(venda._id || venda.numeroPedido || ""),
@@ -556,29 +717,389 @@ function mapVendaToLead(
   };
 }
 
-async function gotoNextResultsPage(page: Page) {
-  const next = page.locator(
-    "button[aria-label*='next' i], button[aria-label*='próxim' i], .MuiTablePagination-actions button:last-child, button:has(svg[data-testid='KeyboardArrowRightIcon'])",
-  );
-  // MUI table pagination usually has two buttons; last enabled is next
+/**
+ * Avança UMA página (seta >), nunca a última (seta >|).
+ * MUI TablePagination com first/last: [primeira, anterior, próxima, última].
+ */
+async function resolveNextPageButton(page: Page) {
   const actions = page.locator(".MuiTablePagination-actions button");
-  if (await actions.count()) {
-    const last = actions.last();
-    if (await last.isDisabled()) return false;
-    await humanPause(1200, 2200);
-    await last.click({ force: true });
-    await sleep(6000);
-    await humanPause(1000, 1800);
-    return true;
+  const count = await actions.count();
+
+  const byIcon = page
+    .locator(".MuiTablePagination-actions button")
+    .filter({
+      has: page.locator(
+        "svg[data-testid='KeyboardArrowRightIcon'], svg[data-testid='NavigateNextIcon']",
+      ),
+    })
+    .first();
+  if (await byIcon.count()) return byIcon;
+
+  const byAria = page.locator(
+    [
+      ".MuiTablePagination-actions button[aria-label='next page']",
+      ".MuiTablePagination-actions button[aria-label='Next page']",
+      ".MuiTablePagination-actions button[aria-label='próxima página']",
+      ".MuiTablePagination-actions button[aria-label='Próxima página']",
+      ".MuiTablePagination-actions button[aria-label='Go to next page']",
+    ].join(", "),
+  );
+  if (await byAria.count()) return byAria.first();
+
+  // Posição: 4 botões → índice 2 (próxima); 2 botões → índice 1 (próxima).
+  // Nunca actions.last() quando há 4 — isso é a ÚLTIMA página (>|).
+  if (count >= 4) return actions.nth(2);
+  if (count === 2) return actions.nth(1);
+  if (count === 1) return actions.first();
+  return null;
+}
+
+function isVendasListUrl(url: string) {
+  return /\/api\/portal\/vendas(\?|$)/i.test(url);
+}
+
+function isVendasListResponse(res: {
+  url: () => string;
+  request: () => { method: () => string };
+  status: () => number;
+}) {
+  const method = res.request().method();
+  return (
+    isVendasListUrl(res.url()) &&
+    (method === "GET" || method === "POST") &&
+    res.status() >= 200 &&
+    res.status() < 300
+  );
+}
+
+async function readVendasFromResponse(
+  res: { json: () => Promise<unknown> },
+): Promise<{ vendas: Record<string, unknown>[]; total?: number } | null> {
+  try {
+    const json = (await res.json()) as {
+      data?: { vendas?: Record<string, unknown>[]; total?: number };
+    };
+    const vendas = json?.data?.vendas;
+    if (!Array.isArray(vendas)) return null;
+    return { vendas, total: json?.data?.total };
+  } catch {
+    return null;
   }
-  if (await next.count()) {
-    const btn = next.last();
-    if (await btn.isDisabled()) return false;
-    await humanPause(1200, 2200);
-    await btn.click({ force: true });
-    await sleep(6000);
-    return true;
+}
+
+type VendasApiCursor = {
+  prevUrl: string | null;
+  lastUrl: string | null;
+  preferManual: boolean;
+  /** Próximo "from" 1-based a buscar (independente da UI quando preferManual). */
+  nextFrom: number | null;
+};
+
+/** Infere a próxima URL comparando dois GETs sucessivos (qual query param subiu). */
+function inferNextVendasUrl(prevUrl: string | null, lastUrl: string | null): string | null {
+  if (!prevUrl || !lastUrl) return null;
+  try {
+    const a = new URL(prevUrl);
+    const b = new URL(lastUrl);
+    const next = new URL(lastUrl);
+    let bumped = false;
+    for (const [key, value] of b.searchParams.entries()) {
+      const prev = a.searchParams.get(key);
+      if (prev == null || prev === value) continue;
+      if (!/^-?\d+$/.test(prev) || !/^-?\d+$/.test(value)) continue;
+      const diff = Number(value) - Number(prev);
+      if (diff === 0) continue;
+      next.searchParams.set(key, String(Number(value) + diff));
+      bumped = true;
+    }
+    return bumped ? next.toString() : null;
+  } catch {
+    return null;
   }
+}
+
+/** Fallback: ajusta page/offset a partir do "from" do Resultados (1-based). */
+function buildVendasUrlForFrom(lastUrl: string, from1: number, pageSize: number): string | null {
+  try {
+    const u = new URL(lastUrl);
+    const page0 = Math.max(0, Math.floor((from1 - 1) / Math.max(1, pageSize)));
+    const page1 = page0 + 1;
+    const pageKeys = [
+      "page",
+      "pagina",
+      "pageNumber",
+      "pageIndex",
+      "numeroPagina",
+      "p",
+      "currentPage",
+    ];
+    for (const k of pageKeys) {
+      if (!u.searchParams.has(k)) continue;
+      const cur = Number(u.searchParams.get(k));
+      u.searchParams.set(k, String(cur === 0 || cur < page1 ? page0 : page1));
+      return u.toString();
+    }
+    for (const k of ["offset", "skip", "from", "start", "inicio"]) {
+      if (!u.searchParams.has(k)) continue;
+      u.searchParams.set(k, String(from1 - 1));
+      return u.toString();
+    }
+    u.searchParams.set("page", String(page0));
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchVendasByUrl(
+  page: Page,
+  url: string,
+): Promise<{ vendas: Record<string, unknown>[]; total?: number } | null> {
+  scrapeLog(`Paginação: fetch manual da API…`);
+  try {
+    const res = await page.request.get(url, { timeout: 60000 });
+    if (!res.ok()) {
+      scrapeLog(`Paginação: fetch manual HTTP ${res.status()}`);
+      return null;
+    }
+    const json = (await res.json()) as {
+      data?: { vendas?: Record<string, unknown>[]; total?: number };
+    };
+    const vendas = json?.data?.vendas;
+    if (!Array.isArray(vendas)) return null;
+    scrapeLog(
+      `API vendas (manual): ${vendas.length} registro(s)${typeof json?.data?.total === "number" ? ` · total=${json.data.total}` : ""}.`,
+    );
+    return { vendas, total: json?.data?.total };
+  } catch (err) {
+    scrapeLog(
+      `Paginação: fetch manual falhou (${err instanceof Error ? err.message : String(err)}).`,
+    );
+    return null;
+  }
+}
+
+/** Lê "Resultados: 526-540 de 1202" na barra de paginação. */
+async function readResultadosRange(
+  page: Page,
+): Promise<{ from: number; to: number; total: number } | null> {
+  const text = await page
+    .locator("body")
+    .innerText()
+    .catch(() => "");
+  const m = text.match(/Resultados:\s*(\d+)\s*[-–]\s*(\d+)\s*de\s*(\d+)/i);
+  if (!m) return null;
+  return { from: Number(m[1]), to: Number(m[2]), total: Number(m[3]) };
+}
+
+async function resolvePrevPageButton(page: Page) {
+  const byIcon = page
+    .locator(".MuiTablePagination-actions button")
+    .filter({
+      has: page.locator(
+        "svg[data-testid='KeyboardArrowLeftIcon'], svg[data-testid='NavigateBeforeIcon']",
+      ),
+    })
+    .first();
+  if (await byIcon.count()) return byIcon;
+  const actions = page.locator(".MuiTablePagination-actions button");
+  const count = await actions.count();
+  if (count >= 4) return actions.nth(1);
+  if (count === 2) return actions.nth(0);
+  return null;
+}
+
+/** Tenta aumentar linhas por página (menos páginas = menos falhas). */
+async function tryIncreaseRowsPerPage(page: Page) {
+  const select = page.locator(
+    ".MuiTablePagination-root .MuiTablePagination-select, .MuiTablePagination-root [role='button'][aria-haspopup='listbox']",
+  ).first();
+  if (!(await select.count())) return;
+  try {
+    await select.click({ force: true });
+    await humanPause(300, 500);
+    const opt = page
+      .locator("[role='option'], li[data-value], .MuiMenuItem-root")
+      .filter({ hasText: /^(50|100|25)$/ })
+      .last();
+    if (await opt.count()) {
+      const label = (await opt.innerText()).trim();
+      await opt.click({ force: true });
+      scrapeLog(`Paginação: linhas por página → ${label}`);
+      await sleep(4000);
+    } else {
+      await page.keyboard.press("Escape").catch(() => undefined);
+    }
+  } catch {
+    await page.keyboard.press("Escape").catch(() => undefined);
+  }
+}
+
+async function pushManualVendasPage(
+  page: Page,
+  pageBuckets: Array<Record<string, unknown>[]>,
+  cursor: VendasApiCursor,
+  targetFrom: number,
+  pageSize: number,
+): Promise<boolean> {
+  const nextUrl =
+    inferNextVendasUrl(cursor.prevUrl, cursor.lastUrl) ||
+    (cursor.lastUrl
+      ? buildVendasUrlForFrom(cursor.lastUrl, targetFrom, pageSize)
+      : null);
+  if (!nextUrl) {
+    scrapeLog("Paginação: sem URL de /vendas para fetch manual.");
+    return false;
+  }
+  const parsed = await fetchVendasByUrl(page, nextUrl);
+  if (!parsed) return false;
+  if (!parsed.vendas.length) {
+    scrapeLog("Paginação: fetch manual voltou 0 vendas — fim da lista.");
+    return false;
+  }
+  cursor.prevUrl = cursor.lastUrl;
+  cursor.lastUrl = nextUrl;
+  cursor.preferManual = true;
+  cursor.nextFrom = targetFrom + parsed.vendas.length;
+  pageBuckets.push(parsed.vendas);
+  scrapeLog(
+    `Página OK via fetch manual · ${targetFrom}-${targetFrom + parsed.vendas.length - 1} · ${parsed.vendas.length} linhas`,
+  );
+  return true;
+}
+
+/**
+ * Avança página: clica > e espera /vendas; se a UI andar sem API, busca a
+ * próxima página direto na API (URL inferida dos GETs anteriores).
+ */
+async function gotoNextResultsPage(
+  page: Page,
+  pageBuckets: Array<Record<string, unknown>[]>,
+  cursor: VendasApiCursor,
+): Promise<boolean> {
+  await humanPause(400, 700);
+
+  const rangeBefore = await readResultadosRange(page);
+  if (rangeBefore) {
+    scrapeLog(
+      `Resultados UI agora: ${rangeBefore.from}-${rangeBefore.to} de ${rangeBefore.total}`,
+    );
+    if (rangeBefore.to >= rangeBefore.total) {
+      scrapeLog("UI já no fim da lista (to >= total).");
+      return false;
+    }
+  }
+
+  const pageSize = rangeBefore ? Math.max(1, rangeBefore.to - rangeBefore.from + 1) : 15;
+  const nextFrom =
+    cursor.nextFrom ||
+    (rangeBefore ? rangeBefore.to + 1 : pageSize + 1);
+
+  // Depois que o clique da UI falha uma vez, prefere API direta (mais estável).
+  if (cursor.preferManual && cursor.lastUrl) {
+    assertNotCancelled();
+    const ok = await pushManualVendasPage(page, pageBuckets, cursor, nextFrom, pageSize);
+    if (ok) return true;
+    scrapeLog("Paginação: fetch manual falhou — tentando clique > de novo…");
+    cursor.preferManual = false;
+  }
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    assertNotCancelled();
+    const nextBtn = await resolveNextPageButton(page);
+    if (!nextBtn) {
+      scrapeLog("Botão próxima página (>) não encontrado — tentando fetch manual…");
+      return pushManualVendasPage(page, pageBuckets, cursor, nextFrom, pageSize);
+    }
+    const label = (
+      (await nextBtn.getAttribute("aria-label").catch(() => "")) || ""
+    ).toLowerCase();
+    if (/last|última|ultima/.test(label)) return false;
+    if (await nextBtn.isDisabled().catch(() => true)) {
+      scrapeLog("Botão próxima página (>) desabilitado — fim da lista.");
+      return false;
+    }
+
+    const bucketsBefore = pageBuckets.length;
+    const rangeAtClick = (await readResultadosRange(page)) || rangeBefore;
+    scrapeLog(
+      `Clicando seta próxima página (>) ${label ? `[${label}] ` : ""}— tentativa ${attempt}/3…`,
+    );
+
+    const responsePromise = page
+      .waitForResponse((res) => isVendasListResponse(res), { timeout: 35000 })
+      .catch(() => null);
+    await nextBtn.scrollIntoViewIfNeeded().catch(() => undefined);
+    await nextBtn.click({ force: true });
+    const res = await responsePromise;
+    for (let w = 0; w < 25 && pageBuckets.length <= bucketsBefore; w++) {
+      await sleep(200);
+    }
+
+    if (pageBuckets.length > bucketsBefore) {
+      const rangeAfter = await readResultadosRange(page);
+      if (rangeAfter) {
+        cursor.nextFrom = rangeAfter.to + 1;
+        scrapeLog(
+          `Página OK via API · Resultados ${rangeAfter.from}-${rangeAfter.to} de ${rangeAfter.total}`,
+        );
+      } else {
+        cursor.nextFrom = nextFrom + pageSize;
+      }
+      return true;
+    }
+
+    if (res) {
+      const parsed = await readVendasFromResponse(res);
+      if (parsed?.vendas.length) {
+        pageBuckets.push(parsed.vendas);
+        cursor.nextFrom = nextFrom + parsed.vendas.length;
+        scrapeLog(
+          `API vendas capturada (via waitForResponse): ${parsed.vendas.length} registro(s).`,
+        );
+        return true;
+      }
+      if (parsed && !parsed.vendas.length) {
+        scrapeLog("Paginação: API voltou 0 vendas — fim da lista.");
+        return false;
+      }
+    }
+
+    const rangeAfter = await readResultadosRange(page);
+    const targetFrom =
+      rangeAfter && rangeAtClick && rangeAfter.from > rangeAtClick.from
+        ? rangeAfter.from
+        : nextFrom;
+
+    scrapeLog(
+      `Paginação: clique sem API útil${rangeAfter ? ` (UI ${rangeAfter.from}-${rangeAfter.to}/${rangeAfter.total})` : ""} — fetch manual…`,
+    );
+    const ok = await pushManualVendasPage(
+      page,
+      pageBuckets,
+      cursor,
+      targetFrom,
+      pageSize,
+    );
+    if (ok) return true;
+    await sleep(1000);
+  }
+
+  const finalRange = await readResultadosRange(page);
+  if (finalRange && finalRange.to >= finalRange.total) {
+    scrapeLog("Fim da lista pelo contador Resultados.");
+    return false;
+  }
+  // Última cartada: fetch manual mesmo sem clique
+  const ok = await pushManualVendasPage(
+    page,
+    pageBuckets,
+    cursor,
+    finalRange ? finalRange.to + 1 : nextFrom,
+    pageSize,
+  );
+  if (ok) return true;
+  scrapeLog("Paginação: não consegui a próxima página da API.");
   return false;
 }
 
@@ -642,18 +1163,46 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     liveTimer = startLiveShotLoop(page);
 
     const pageBuckets: Array<Record<string, unknown>[]> = [];
+    let listTotal: number | null = null;
+    const vendasCursor: VendasApiCursor = {
+      prevUrl: null,
+      lastUrl: null,
+      preferManual: false,
+      nextFrom: null,
+    };
     page.on("response", async (res) => {
       try {
-        if (!res.url().includes("/api/portal/vendas?") || res.request().method() !== "GET") return;
-        if (res.status() !== 200) return;
+        if (!isVendasListUrl(res.url())) return;
+        const method = res.request().method();
+        if (method !== "GET" && method !== "POST") return;
+        if (res.status() < 200 || res.status() >= 300) {
+          scrapeLog(
+            `API vendas HTTP ${res.status()} ${method} — ${res.url().slice(0, 160)}`,
+          );
+          return;
+        }
+        const url = res.url();
+        if (vendasCursor.lastUrl && vendasCursor.lastUrl !== url) {
+          vendasCursor.prevUrl = vendasCursor.lastUrl;
+        }
+        vendasCursor.lastUrl = url;
         const json = (await res.json()) as {
           data?: { vendas?: Record<string, unknown>[]; total?: number };
         };
         const vendas = json?.data?.vendas;
+        if (typeof json?.data?.total === "number") {
+          listTotal = json.data.total;
+        }
         if (Array.isArray(vendas) && vendas.length) {
           pageBuckets.push(vendas);
-          scrapeLog(`API vendas capturada: ${vendas.length} registro(s) nesta resposta.`);
+          scrapeLog(
+            `API vendas capturada: ${vendas.length} registro(s)${listTotal != null ? ` · total=${listTotal}` : ""}.`,
+          );
           void captureLiveShot(page, "api-vendas");
+        } else if (Array.isArray(vendas) && vendas.length === 0) {
+          scrapeLog(
+            `API vendas vazia${listTotal != null ? ` · total=${listTotal}` : ""}.`,
+          );
         }
       } catch {
         // ignore parse errors
@@ -704,24 +1253,47 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     await closeDrawer(page);
     await captureLiveShot(page, "lista");
     scrapeLog("Filtros aplicados · lendo lista (sem Avançar/Detalhar).");
+    await tryIncreaseRowsPerPage(page);
+    const range0 = await readResultadosRange(page);
+    if (range0) {
+      listTotal = range0.total;
+      scrapeLog(
+        `Lista UI: Resultados ${range0.from}-${range0.to} de ${range0.total}`,
+      );
+    }
 
     // Venda e Interesse: mailing sai da lista (/api/portal/vendas).
-    // Não clicar em Detalhar / Avançar — dados já vêm na primeira página da lista.
-    const maxPages = options.maxPages ?? 50;
+    // Paginação: seta > até to >= total (ex.: 1202). Nunca >|.
+    const maxPages = options.maxPages ?? 5000;
     let pageNo = 1;
+    let consumedBuckets = 0;
     while (pageNo <= maxPages) {
       assertNotCancelled();
+      const rangeNow = await readResultadosRange(page);
       scrapeLog(
         saleType === "venda"
-          ? `Lendo página ${pageNo} (Venda / Aguardando tratamento)…`
-          : `Lendo página ${pageNo} de interesses…`,
+          ? `Lendo página ${pageNo} (Venda / Aguardando tratamento)${rangeNow ? ` · ${rangeNow.from}-${rangeNow.to}/${rangeNow.total}` : ""}…`
+          : `Lendo página ${pageNo} de interesses${rangeNow ? ` · ${rangeNow.from}-${rangeNow.to}/${rangeNow.total}` : ""}…`,
         { page: pageNo },
       );
 
-      // Wait a bit for response capture
-      await sleep(1500);
-      const latest = pageBuckets[pageBuckets.length - 1] || [];
-      scrapeLog(`Página ${pageNo}: ${latest.length} linha(s) na captura da API.`);
+      // Espera captura da API desta página (novo bucket após Filtrar / próxima)
+      for (let w = 0; w < 40 && pageBuckets.length <= consumedBuckets; w++) {
+        await sleep(500);
+      }
+      const latest =
+        pageBuckets.length > consumedBuckets
+          ? pageBuckets[pageBuckets.length - 1] || []
+          : pageBuckets[pageBuckets.length - 1] || [];
+      consumedBuckets = pageBuckets.length;
+      if (rangeNow) {
+        vendasCursor.nextFrom = rangeNow.to + 1;
+      } else if (latest.length && vendasCursor.nextFrom == null) {
+        vendasCursor.nextFrom = latest.length + 1;
+      }
+      scrapeLog(
+        `Página ${pageNo}: ${latest.length} linha(s) na captura da API${listTotal != null ? ` · meta total=${listTotal}` : ""}.`,
+      );
       await captureLiveShot(page, `pagina-${pageNo}`);
       for (const venda of latest) {
         assertNotCancelled();
@@ -751,10 +1323,15 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
           continue;
         }
         await updateLeads((leads) => {
-          const result = upsertLeadByKey(leads, {
-            ...draft,
-            id: newId("lead"),
-          });
+          // Venda: importa mesmo com CPF já cadastrado (pedido/papId ainda deduplica)
+          const result = upsertLeadByKey(
+            leads,
+            {
+              ...draft,
+              id: newId("lead"),
+            },
+            { allowDuplicateCpf: saleType === "venda" },
+          );
           if (result.skipped && result.skipReason === "cpf") {
             scrapeLog(
               `Ignorado CPF já cadastrado: ${draft.name} · CPF ${draft.document || "—"} · pedido ${draft.part1?.numeroPedido || ""}`,
@@ -787,10 +1364,28 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         await humanPause(400, 900);
       }
 
+      const rangeDone = await readResultadosRange(page);
+      if (rangeDone && rangeDone.to >= rangeDone.total) {
+        scrapeLog(
+          `Página ${pageNo} concluída · Resultados ${rangeDone.from}-${rangeDone.to} de ${rangeDone.total} — fim da lista.`,
+        );
+        break;
+      }
       scrapeLog(`Página ${pageNo} concluída · avançando paginação…`);
-      const moved = await gotoNextResultsPage(page);
+      if (pageNo >= maxPages) {
+        scrapeLog(`Limite de ${maxPages} páginas atingido — parei a paginação.`);
+        break;
+      }
+      const bucketsBeforeNext = pageBuckets.length;
+      const moved = await gotoNextResultsPage(page, pageBuckets, vendasCursor);
       if (!moved) {
         scrapeLog("Fim da paginação.");
+        break;
+      }
+      if (pageBuckets.length <= bucketsBeforeNext) {
+        scrapeLog(
+          "Paginação: avanço confirmado sem bucket novo — encerrando por segurança.",
+        );
         break;
       }
       pageNo += 1;

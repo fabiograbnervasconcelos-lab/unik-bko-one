@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { newId } from "@/lib/mailing/crypto";
+import { resolveMailingPlanLabel } from "@/lib/mailing/plan-map";
 import { onlyDigits, onlyPhone, updateLeads, upsertLeadByKey } from "@/lib/mailing/store";
 import type { MailingLead } from "@/lib/mailing/types";
 
@@ -20,6 +21,7 @@ const STATE_KEYS = ["uf", "estado", "state"];
 const ADDRESS_KEYS = ["endereco", "endereço", "address", "rua"];
 const ZIP_KEYS = ["cep", "zip"];
 const PLAN_KEYS = ["plano", "plan", "oferta"];
+const PLAN_VALUE_KEYS = ["valor", "valorplano", "preco", "preço", "price", "mensalidade"];
 const NOTES_KEYS = ["obs", "observacao", "observação", "notes", "nota"];
 
 function normKey(value: string) {
@@ -105,7 +107,11 @@ export async function importExcelLeads(params: {
         city: pick(row, CITY_KEYS) || undefined,
         state: pick(row, STATE_KEYS) || undefined,
         zip: pick(row, ZIP_KEYS) || undefined,
-        plan: pick(row, PLAN_KEYS) || undefined,
+        plan:
+          resolveMailingPlanLabel({
+            valorPlano: pick(row, PLAN_VALUE_KEYS),
+            plano: pick(row, PLAN_KEYS),
+          }) || undefined,
         notes: pick(row, NOTES_KEYS) || undefined,
         raw: row,
         createdBy: params.createdBy,
