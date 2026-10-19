@@ -318,18 +318,46 @@ async function openFilters(page: Page) {
 }
 
 async function selectTipo(page: Page, tipoLabel: "Interesse" | "Venda") {
-  await page
+  const control = page
     .locator(".MuiDrawer-paper .filter-select-pdv div[class*='-control']")
-    .first()
-    .click({ force: true });
+    .first();
+  const current = (
+    (await page
+      .locator(".MuiDrawer-paper .filter-select-pdv div[class*='-singleValue']")
+      .first()
+      .innerText()
+      .catch(() => "")) || ""
+  ).trim();
+  if (new RegExp(`^${tipoLabel}$`, "i").test(current)) {
+    scrapeLog(`Tipo já está em ${tipoLabel} — sem reabrir o select.`);
+    return;
+  }
+
+  await control.click({ force: true });
   await humanPause(700, 1100);
-  await page.getByText(tipoLabel, { exact: true }).click({ force: true });
+  // Clica só a opção do menu (não o singleValue já visível — evita strict mode)
+  const menuOpt = page
+    .locator(
+      "div[id*='react-select'][id*='option'], div[class*='-menu'] div[class*='-option'], div[class*='-option']",
+    )
+    .filter({ hasText: new RegExp(`^${tipoLabel}$`, "i") })
+    .first();
+  if (!(await menuOpt.count())) {
+    throw new Error(`Opção Tipo = ${tipoLabel} não apareceu no menu.`);
+  }
+  await menuOpt.click({ force: true });
   await humanPause(1200, 1800);
-  const text = await page.locator(".MuiDrawer-paper").innerText();
-  const ok =
-    tipoLabel === "Interesse" ? /interesse/i.test(text) : /\bvenda\b/i.test(text);
-  if (!ok) {
-    throw new Error(`Não foi possível selecionar Tipo = ${tipoLabel}.`);
+  const selected = (
+    (await page
+      .locator(".MuiDrawer-paper .filter-select-pdv div[class*='-singleValue']")
+      .first()
+      .innerText()
+      .catch(() => "")) || ""
+  ).trim();
+  if (!new RegExp(`^${tipoLabel}$`, "i").test(selected)) {
+    throw new Error(
+      `Não foi possível selecionar Tipo = ${tipoLabel} (ficou "${selected || "vazio"}").`,
+    );
   }
 }
 
@@ -916,10 +944,15 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
           continue;
         }
         await updateLeads((leads) => {
-          const result = upsertLeadByKey(leads, {
-            ...draft,
-            id: newId("lead"),
-          });
+          // Venda: importa mesmo com CPF já cadastrado (pedido/papId ainda deduplica)
+          const result = upsertLeadByKey(
+            leads,
+            {
+              ...draft,
+              id: newId("lead"),
+            },
+            { allowDuplicateCpf: saleType === "venda" },
+          );
           if (result.skipped && result.skipReason === "cpf") {
             scrapeLog(
               `Ignorado CPF já cadastrado: ${draft.name} · CPF ${draft.document || "—"} · pedido ${draft.part1?.numeroPedido || ""}`,
