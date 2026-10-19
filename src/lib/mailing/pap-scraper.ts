@@ -152,7 +152,8 @@ function scrapeLog(line: string, patch: Partial<ScrapeProgress> = {}) {
     second: "2-digit",
   });
   const entry = `[${stamp}] ${line}`;
-  const logs = [...(current.logs || []), entry].slice(-300);
+  // Listas longas (centenas de páginas) — manter histórico maior no painel
+  const logs = [...(current.logs || []), entry].slice(-5000);
   const next: ScrapeProgress = {
     ...current,
     ...patch,
@@ -753,37 +754,148 @@ async function resolveNextPageButton(page: Page) {
   return null;
 }
 
-async function gotoNextResultsPage(page: Page) {
-  await humanPause(800, 1400);
-
-  const nextBtn = await resolveNextPageButton(page);
-  if (!nextBtn) {
-    scrapeLog("Botão próxima página (>) não encontrado.");
-    return false;
-  }
-
-  const label = (
-    (await nextBtn.getAttribute("aria-label").catch(() => "")) || ""
-  ).toLowerCase();
-  if (/last|última|ultima/.test(label)) {
-    scrapeLog(
-      `Paginação: recusei clique em "${label || "última"}" — preciso da seta >.`,
-    );
-    return false;
-  }
-
-  if (await nextBtn.isDisabled().catch(() => true)) {
-    scrapeLog("Botão próxima página (>) desabilitado — fim da lista.");
-    return false;
-  }
-
-  scrapeLog(
-    `Clicando seta próxima página (>) ${label ? `[${label}] ` : ""}— uma página por vez…`,
+function isVendasListResponse(res: { url: () => string; request: () => { method: () => string }; status: () => number }) {
+  return (
+    res.url().includes("/api/portal/vendas?") &&
+    res.request().method() === "GET" &&
+    res.status() === 200
   );
+}
+
+async function readVendasFromResponse(
+  res: { json: () => Promise<unknown> },
+): Promise<{ vendas: Record<string, unknown>[]; total?: number } | null> {
+  try {
+    const json = (await res.json()) as {
+      data?: { vendas?: Record<string, unknown>[]; total?: number };
+    };
+    const vendas = json?.data?.vendas;
+    if (!Array.isArray(vendas)) return null;
+    return { vendas, total: json?.data?.total };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Clica > e espera a API /vendas da nova página.
+ * Só encerra com false quando a seta está desabilitada ou a API voltou vazia.
+ * Timeout/API lenta → tenta de novo (não aborta a lista inteira).
+ */
+async function gotoNextResultsPage(
+  page: Page,
+  pageBuckets: Array<Record<string, unknown>[]>,
+): Promise<boolean> {
+  await humanPause(600, 1100);
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    assertNotCancelled();
+    const nextBtn = await resolveNextPageButton(page);
+    if (!nextBtn) {
+      scrapeLog("Botão próxima página (>) não encontrado.");
+      return false;
+    }
+
+    const label = (
+      (await nextBtn.getAttribute("aria-label").catch(() => "")) || ""
+    ).toLowerCase();
+    if (/last|última|ultima/.test(label)) {
+      scrapeLog(
+        `Paginação: recusei clique em "${label || "última"}" — preciso da seta >.`,
+      );
+      return false;
+    }
+
+    if (await nextBtn.isDisabled().catch(() => true)) {
+      scrapeLog("Botão próxima página (>) desabilitado — fim da lista.");
+      return false;
+    }
+
+    const bucketsBefore = pageBuckets.length;
+    scrapeLog(
+      `Clicando seta próxima página (>) ${label ? `[${label}] ` : ""}— tentativa ${attempt}/3…`,
+    );
+
+    const responsePromise = page
+      .waitForResponse((res) => isVendasListResponse(res), { timeout: 60000 })
+      .catch(() => null);
+
+    await nextBtn.click({ force: true });
+    const res = await responsePromise;
+
+    // Dá tempo do listener on("response") também ingerir
+    for (let w = 0; w < 25 && pageBuckets.length <= bucketsBefore; w++) {
+      await sleep(200);
+    }
+
+    if (pageBuckets.length > bucketsBefore) {
+      await humanPause(400, 800);
+      return true;
+    }
+
+    if (res) {
+      const parsed = await readVendasFromResponse(res);
+      if (parsed) {
+        if (!parsed.vendas.length) {
+          scrapeLog(
+            `Paginação: API voltou 0 vendas${parsed.total != null ? ` (total=${parsed.total})` : ""} — fim da lista.`,
+          );
+          return false;
+        }
+        pageBuckets.push(parsed.vendas);
+        scrapeLog(
+          `API vendas capturada (via waitForResponse): ${parsed.vendas.length} registro(s).`,
+        );
+        await humanPause(400, 800);
+        return true;
+      }
+    }
+
+    scrapeLog(
+      `Paginação: tentativa ${attempt}/3 sem resposta nova da API — ${attempt < 3 ? "tentando de novo…" : "vou verificar se a seta ainda está ativa."}`,
+    );
+    await sleep(2000);
+  }
+
+  // Última checagem: se a seta desabilitou, acabou; se ainda ativa, NÃO desistir cego —
+  // deixa o loop principal decidir com base no botão.
+  const nextBtn = await resolveNextPageButton(page);
+  if (!nextBtn || (await nextBtn.isDisabled().catch(() => true))) {
+    scrapeLog("Botão próxima página (>) desabilitado após retries — fim da lista.");
+    return false;
+  }
+  scrapeLog(
+    "Paginação: API lenta, mas seta > ainda ativa — seguindo para não pular páginas.",
+  );
+  // Empurra bucket vazio-sentinel? Melhor: clicar de novo uma vez com wait longo
+  const bucketsBefore = pageBuckets.length;
+  const responsePromise = page
+    .waitForResponse((res) => isVendasListResponse(res), { timeout: 90000 })
+    .catch(() => null);
   await nextBtn.click({ force: true });
-  await sleep(6000);
-  await humanPause(1000, 1800);
-  return true;
+  const res = await responsePromise;
+  for (let w = 0; w < 40 && pageBuckets.length <= bucketsBefore; w++) {
+    await sleep(250);
+  }
+  if (pageBuckets.length > bucketsBefore) return true;
+  if (res) {
+    const parsed = await readVendasFromResponse(res);
+    if (parsed?.vendas.length) {
+      pageBuckets.push(parsed.vendas);
+      scrapeLog(
+        `API vendas capturada (retry longo): ${parsed.vendas.length} registro(s).`,
+      );
+      return true;
+    }
+    if (parsed && !parsed.vendas.length) {
+      scrapeLog("Paginação: API vazia no retry longo — fim da lista.");
+      return false;
+    }
+  }
+  scrapeLog(
+    "Paginação: sem nova página da API após retries longos — encerrando para evitar loop.",
+  );
+  return false;
 }
 
 export async function runPapHistoricoScrape(options: PapScrapeOptions) {
@@ -1010,18 +1122,15 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         break;
       }
       const bucketsBeforeNext = pageBuckets.length;
-      const moved = await gotoNextResultsPage(page);
+      const moved = await gotoNextResultsPage(page, pageBuckets);
       if (!moved) {
         scrapeLog("Fim da paginação.");
         break;
       }
-      // Garante que a próxima iteração use a resposta da nova página
-      for (let w = 0; w < 24 && pageBuckets.length <= bucketsBeforeNext; w++) {
-        await sleep(500);
-      }
       if (pageBuckets.length <= bucketsBeforeNext) {
+        // gotoNext disse ok mas sem bucket — não deve acontecer; evita reprocessar a mesma página
         scrapeLog(
-          "Paginação: cliquei > mas a API não devolveu página nova — encerrando.",
+          "Paginação: avanço confirmado sem bucket novo — encerrando por segurança.",
         );
         break;
       }

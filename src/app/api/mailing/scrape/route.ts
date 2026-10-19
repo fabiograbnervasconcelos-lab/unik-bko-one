@@ -13,7 +13,8 @@ import {
 } from "@/lib/mailing/pap-scraper";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 800;
+/** Scrape longo (centenas de páginas) roda em background após 202. */
+export const maxDuration = 3600;
 
 /** Período padrão do histório (editável na UI). */
 const DEFAULT_DATE_FROM = "16/10/2026";
