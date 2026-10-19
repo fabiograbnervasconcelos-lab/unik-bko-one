@@ -5,6 +5,8 @@
  * 85 / 100 / 155 / 170 / 185 / 200 → 1GB
  */
 
+import type { MailingLead } from "@/lib/mailing/types";
+
 const VALOR_TO_PLAN: Record<number, string> = {
   55: "600 mega",
   95: "600 mega",
@@ -30,8 +32,7 @@ export function parsePlanValorReais(raw: string | number | null | undefined): nu
   if (!text) return null;
 
   // Remove símbolo/moeda e espaços
-  let s = text.replace(/r\$\s*/gi, "").replace(/\s/g, "");
-  // BR: 1.100,00 → milhares; nossos valores são 55–200, então pega o 1º número 2–3 dígitos
+  const s = text.replace(/r\$\s*/gi, "").replace(/\s/g, "");
   // Preferência: número com centavos "110,00" / "110.00"
   const withCents = s.match(/(\d{1,3})[.,](\d{2})(?!\d)/);
   if (withCents) {
@@ -71,4 +72,36 @@ export function resolveMailingPlanLabel(params: {
   if (mapped) return mapped;
   const fallback = String(params.plano || params.velocidade || "").trim();
   return fallback;
+}
+
+/** Atualiza plan/planData de um lead se o valor bater na regra comercial. */
+export function applyPlanMapToLead(lead: MailingLead): MailingLead {
+  const valor =
+    lead.planData?.valorPlano ||
+    lead.planData?.valor ||
+    lead.plan ||
+    "";
+  const mapped = mapPlanLabelByValor(valor, [
+    lead.plan,
+    lead.planData?.plano,
+    lead.planData?.velocidade,
+  ]);
+  if (!mapped) return lead;
+  if (lead.plan === mapped && lead.planData?.plano === mapped) return lead;
+  return {
+    ...lead,
+    plan: mapped,
+    planData: {
+      ...(lead.planData || {}),
+      planoOriginal:
+        lead.planData?.planoOriginal ||
+        lead.planData?.plano ||
+        lead.plan ||
+        "",
+      plano: mapped,
+      velocidade: mapped,
+      valorPlano: lead.planData?.valorPlano || String(valor || ""),
+    },
+    updatedAt: new Date().toISOString(),
+  };
 }
