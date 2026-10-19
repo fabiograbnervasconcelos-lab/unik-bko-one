@@ -14,6 +14,10 @@ import {
   defaultScrapeProgress,
 } from "@/lib/mailing/store";
 import { resolveMailingPlanLabel } from "@/lib/mailing/plan-map";
+import {
+  buildVendasUrlForFrom,
+  inferNextVendasUrl,
+} from "@/lib/mailing/pap-vendas-url";
 import type { LeadPartData, MailingLead, ScrapeProgress } from "@/lib/mailing/types";
 import { ensureDataDirs, MAILING_LIVE_DIR, MAILING_LIVE_SHOT } from "@/lib/paths";
 
@@ -793,84 +797,111 @@ type VendasApiCursor = {
   preferManual: boolean;
   /** Próximo "from" 1-based a buscar (independente da UI quando preferManual). */
   nextFrom: number | null;
+  /** Authorization capturado do último GET /vendas do browser (JWT+stamp PAP). */
+  authHeader: string | null;
+  /** true se o param page da API começa em 0 (senão assume 1-based, padrão PAP). */
+  pageZeroBased: boolean | null;
 };
 
-/** Infere a próxima URL comparando dois GETs sucessivos (qual query param subiu). */
-function inferNextVendasUrl(prevUrl: string | null, lastUrl: string | null): string | null {
-  if (!prevUrl || !lastUrl) return null;
-  try {
-    const a = new URL(prevUrl);
-    const b = new URL(lastUrl);
-    const next = new URL(lastUrl);
-    let bumped = false;
-    for (const [key, value] of b.searchParams.entries()) {
-      const prev = a.searchParams.get(key);
-      if (prev == null || prev === value) continue;
-      if (!/^-?\d+$/.test(prev) || !/^-?\d+$/.test(value)) continue;
-      const diff = Number(value) - Number(prev);
-      if (diff === 0) continue;
-      next.searchParams.set(key, String(Number(value) + diff));
-      bumped = true;
-    }
-    return bumped ? next.toString() : null;
-  } catch {
-    return null;
+function resolveManualVendasUrl(
+  cursor: VendasApiCursor,
+  targetFrom: number,
+  pageSize: number,
+): string | null {
+  // Prefer absolute page from targetFrom — inferNext fica atrasado quando a UI
+  // avançou sem disparar /vendas (lastUrl ainda na página anterior).
+  if (cursor.lastUrl) {
+    const built = buildVendasUrlForFrom(
+      cursor.lastUrl,
+      targetFrom,
+      pageSize,
+      cursor.pageZeroBased,
+    );
+    if (built) return built;
   }
-}
-
-/** Fallback: ajusta page/offset a partir do "from" do Resultados (1-based). */
-function buildVendasUrlForFrom(lastUrl: string, from1: number, pageSize: number): string | null {
-  try {
-    const u = new URL(lastUrl);
-    const page0 = Math.max(0, Math.floor((from1 - 1) / Math.max(1, pageSize)));
-    const page1 = page0 + 1;
-    const pageKeys = [
-      "page",
-      "pagina",
-      "pageNumber",
-      "pageIndex",
-      "numeroPagina",
-      "p",
-      "currentPage",
-    ];
-    for (const k of pageKeys) {
-      if (!u.searchParams.has(k)) continue;
-      const cur = Number(u.searchParams.get(k));
-      u.searchParams.set(k, String(cur === 0 || cur < page1 ? page0 : page1));
-      return u.toString();
-    }
-    for (const k of ["offset", "skip", "from", "start", "inicio"]) {
-      if (!u.searchParams.has(k)) continue;
-      u.searchParams.set(k, String(from1 - 1));
-      return u.toString();
-    }
-    u.searchParams.set("page", String(page0));
-    return u.toString();
-  } catch {
-    return null;
-  }
+  return inferNextVendasUrl(cursor.prevUrl, cursor.lastUrl);
 }
 
 async function fetchVendasByUrl(
   page: Page,
   url: string,
+  cursor: VendasApiCursor,
 ): Promise<{ vendas: Record<string, unknown>[]; total?: number } | null> {
   scrapeLog(`Paginação: fetch manual da API…`);
+  const headers: Record<string, string> = {};
+  if (cursor.authHeader) {
+    headers.authorization = cursor.authHeader;
+  }
+  type VendasListJson = {
+    data?: { vendas?: Record<string, unknown>[]; total?: number };
+    code?: number;
+    message?: string;
+  };
   try {
-    const res = await page.request.get(url, { timeout: 60000 });
-    if (!res.ok()) {
-      scrapeLog(`Paginação: fetch manual HTTP ${res.status()}`);
+    let json: VendasListJson | null = null;
+    let status = 0;
+
+    const res = await page.request.get(url, { timeout: 60000, headers });
+    status = res.status();
+    if (res.ok()) {
+      json = (await res.json()) as VendasListJson;
+    } else {
+      scrapeLog(`Paginação: fetch manual HTTP ${status} — tentando fetch in-page…`);
+    }
+
+    if (!json) {
+      const inPage = await page
+        .evaluate(
+          async ({ fetchUrl, auth }) => {
+            const h: Record<string, string> = { Accept: "application/json" };
+            if (auth) h.Authorization = auth;
+            const r = await fetch(fetchUrl, {
+              method: "GET",
+              credentials: "include",
+              headers: h,
+            });
+            const text = await r.text();
+            let body: unknown = null;
+            try {
+              body = JSON.parse(text);
+            } catch {
+              body = null;
+            }
+            return { status: r.status, body };
+          },
+          { fetchUrl: url, auth: cursor.authHeader },
+        )
+        .catch((err) => {
+          scrapeLog(
+            `Paginação: fetch in-page falhou (${err instanceof Error ? err.message : String(err)}).`,
+          );
+          return null;
+        });
+      if (inPage) {
+        status = inPage.status;
+        if (inPage.status >= 200 && inPage.status < 300) {
+          json = inPage.body as VendasListJson;
+        } else {
+          scrapeLog(`Paginação: fetch in-page HTTP ${inPage.status}`);
+        }
+      }
+    }
+
+    if (!json) {
+      scrapeLog(`Paginação: fetch manual sem JSON (HTTP ${status}).`);
       return null;
     }
-    const json = (await res.json()) as {
-      data?: { vendas?: Record<string, unknown>[]; total?: number };
-    };
-    const vendas = json?.data?.vendas;
-    if (!Array.isArray(vendas)) return null;
+    const vendas = json.data?.vendas;
+    if (!Array.isArray(vendas)) {
+      scrapeLog(
+        `Paginação: resposta sem data.vendas${json.message ? ` (${json.message})` : ""}.`,
+      );
+      return null;
+    }
     scrapeLog(
-      `API vendas (manual): ${vendas.length} registro(s)${typeof json?.data?.total === "number" ? ` · total=${json.data.total}` : ""}.`,
+      `API vendas (manual): ${vendas.length} registro(s)${typeof json.data?.total === "number" ? ` · total=${json.data.total}` : ""}.`,
     );
-    return { vendas, total: json?.data?.total };
+    return { vendas, total: json.data?.total };
   } catch (err) {
     scrapeLog(
       `Paginação: fetch manual falhou (${err instanceof Error ? err.message : String(err)}).`,
@@ -942,16 +973,36 @@ async function pushManualVendasPage(
   targetFrom: number,
   pageSize: number,
 ): Promise<boolean> {
-  const nextUrl =
-    inferNextVendasUrl(cursor.prevUrl, cursor.lastUrl) ||
-    (cursor.lastUrl
-      ? buildVendasUrlForFrom(cursor.lastUrl, targetFrom, pageSize)
-      : null);
+  const nextUrl = resolveManualVendasUrl(cursor, targetFrom, pageSize);
   if (!nextUrl) {
     scrapeLog("Paginação: sem URL de /vendas para fetch manual.");
     return false;
   }
-  const parsed = await fetchVendasByUrl(page, nextUrl);
+  // Evita rebuscar a mesma page= já em lastUrl
+  if (cursor.lastUrl && nextUrl === cursor.lastUrl) {
+    const bumped = buildVendasUrlForFrom(
+      cursor.lastUrl,
+      targetFrom + Math.max(1, pageSize),
+      pageSize,
+      cursor.pageZeroBased,
+    );
+    if (bumped && bumped !== nextUrl) {
+      scrapeLog("Paginação: URL manual == lastUrl — avançando page…");
+      const parsedSame = await fetchVendasByUrl(page, bumped, cursor);
+      if (parsedSame?.vendas.length) {
+        cursor.prevUrl = cursor.lastUrl;
+        cursor.lastUrl = bumped;
+        cursor.preferManual = true;
+        cursor.nextFrom = targetFrom + pageSize + parsedSame.vendas.length;
+        pageBuckets.push(parsedSame.vendas);
+        scrapeLog(
+          `Página OK via fetch manual · offset+size · ${parsedSame.vendas.length} linhas`,
+        );
+        return true;
+      }
+    }
+  }
+  const parsed = await fetchVendasByUrl(page, nextUrl, cursor);
   if (!parsed) return false;
   if (!parsed.vendas.length) {
     scrapeLog("Paginação: fetch manual voltou 0 vendas — fim da lista.");
@@ -984,16 +1035,32 @@ async function gotoNextResultsPage(
     scrapeLog(
       `Resultados UI agora: ${rangeBefore.from}-${rangeBefore.to} de ${rangeBefore.total}`,
     );
-    if (rangeBefore.to >= rangeBefore.total) {
+    // Só encerra pela UI se o cursor API também já passou do total
+    if (
+      rangeBefore.to >= rangeBefore.total &&
+      (cursor.nextFrom == null || cursor.nextFrom > rangeBefore.total)
+    ) {
       scrapeLog("UI já no fim da lista (to >= total).");
       return false;
     }
   }
 
   const pageSize = rangeBefore ? Math.max(1, rangeBefore.to - rangeBefore.from + 1) : 15;
+  // nextFrom do cursor manda — UI travada não pode puxar de volta
   const nextFrom =
-    cursor.nextFrom ||
-    (rangeBefore ? rangeBefore.to + 1 : pageSize + 1);
+    cursor.nextFrom &&
+    (!rangeBefore || cursor.nextFrom > rangeBefore.to || cursor.preferManual)
+      ? cursor.nextFrom
+      : rangeBefore
+        ? rangeBefore.to + 1
+        : cursor.nextFrom || pageSize + 1;
+
+  if (rangeBefore && nextFrom > rangeBefore.total) {
+    scrapeLog(
+      `Cursor API já além do total (nextFrom=${nextFrom} > ${rangeBefore.total}) — fim.`,
+    );
+    return false;
+  }
 
   // Depois que o clique da UI falha uma vez, prefere API direta (mais estável).
   if (cursor.preferManual && cursor.lastUrl) {
@@ -1001,7 +1068,7 @@ async function gotoNextResultsPage(
     const ok = await pushManualVendasPage(page, pageBuckets, cursor, nextFrom, pageSize);
     if (ok) return true;
     scrapeLog("Paginação: fetch manual falhou — tentando clique > de novo…");
-    cursor.preferManual = false;
+    // Mantém preferManual: cliques mid-list costumam falhar de novo
   }
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -1014,9 +1081,23 @@ async function gotoNextResultsPage(
     const label = (
       (await nextBtn.getAttribute("aria-label").catch(() => "")) || ""
     ).toLowerCase();
-    if (/last|última|ultima/.test(label)) return false;
+    if (/last|última|ultima/.test(label)) {
+      scrapeLog("Botão com label de última página — tentando fetch manual…");
+      return pushManualVendasPage(page, pageBuckets, cursor, nextFrom, pageSize);
+    }
     if (await nextBtn.isDisabled().catch(() => true)) {
-      scrapeLog("Botão próxima página (>) desabilitado — fim da lista.");
+      scrapeLog(
+        "Botão próxima página (>) desabilitado — tentando fetch manual antes de encerrar…",
+      );
+      const ok = await pushManualVendasPage(
+        page,
+        pageBuckets,
+        cursor,
+        nextFrom,
+        pageSize,
+      );
+      if (ok) return true;
+      scrapeLog("Botão > desabilitado e fetch manual falhou — fim da lista.");
       return false;
     }
 
@@ -1169,7 +1250,34 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
       lastUrl: null,
       preferManual: false,
       nextFrom: null,
+      authHeader: null,
+      pageZeroBased: null,
     };
+    page.on("request", (req) => {
+      try {
+        if (!isVendasListUrl(req.url())) return;
+        const method = req.method();
+        if (method !== "GET" && method !== "POST") return;
+        const auth = req.headers()["authorization"] || req.headers()["Authorization"];
+        if (auth) vendasCursor.authHeader = auth;
+        const url = req.url();
+        try {
+          const pageParam = new URL(url).searchParams.get("page");
+          if (pageParam != null && /^\d+$/.test(pageParam)) {
+            const n = Number(pageParam);
+            if (vendasCursor.pageZeroBased == null) {
+              vendasCursor.pageZeroBased = n === 0;
+            } else if (n === 0) {
+              vendasCursor.pageZeroBased = true;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      } catch {
+        // ignore
+      }
+    });
     page.on("response", async (res) => {
       try {
         if (!isVendasListUrl(res.url())) return;
@@ -1186,6 +1294,10 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
           vendasCursor.prevUrl = vendasCursor.lastUrl;
         }
         vendasCursor.lastUrl = url;
+        const auth =
+          res.request().headers()["authorization"] ||
+          res.request().headers()["Authorization"];
+        if (auth) vendasCursor.authHeader = auth;
         const json = (await res.json()) as {
           data?: { vendas?: Record<string, unknown>[]; total?: number };
         };
@@ -1286,13 +1398,21 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
           ? pageBuckets[pageBuckets.length - 1] || []
           : pageBuckets[pageBuckets.length - 1] || [];
       consumedBuckets = pageBuckets.length;
-      if (rangeNow) {
-        vendasCursor.nextFrom = rangeNow.to + 1;
+      // Nunca recuar nextFrom pela UI quando já estamos em modo API (label trava).
+      if (vendasCursor.preferManual) {
+        if (vendasCursor.nextFrom == null && rangeNow) {
+          vendasCursor.nextFrom = rangeNow.to + 1;
+        }
+      } else if (rangeNow) {
+        const uiNext = rangeNow.to + 1;
+        if (vendasCursor.nextFrom == null || uiNext > vendasCursor.nextFrom) {
+          vendasCursor.nextFrom = uiNext;
+        }
       } else if (latest.length && vendasCursor.nextFrom == null) {
         vendasCursor.nextFrom = latest.length + 1;
       }
       scrapeLog(
-        `Página ${pageNo}: ${latest.length} linha(s) na captura da API${listTotal != null ? ` · meta total=${listTotal}` : ""}.`,
+        `Página ${pageNo}: ${latest.length} linha(s) na captura da API${listTotal != null ? ` · meta total=${listTotal}` : ""}${vendasCursor.nextFrom != null ? ` · nextFrom=${vendasCursor.nextFrom}` : ""}${vendasCursor.preferManual ? " · API-manual" : ""}.`,
       );
       await captureLiveShot(page, `pagina-${pageNo}`);
       for (const venda of latest) {
@@ -1365,9 +1485,17 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
       }
 
       const rangeDone = await readResultadosRange(page);
-      if (rangeDone && rangeDone.to >= rangeDone.total) {
+      const apiPastEnd =
+        listTotal != null &&
+        vendasCursor.nextFrom != null &&
+        vendasCursor.nextFrom > listTotal;
+      const uiAtEnd =
+        rangeDone &&
+        rangeDone.to >= rangeDone.total &&
+        (vendasCursor.nextFrom == null || vendasCursor.nextFrom > rangeDone.total);
+      if (apiPastEnd || uiAtEnd) {
         scrapeLog(
-          `Página ${pageNo} concluída · Resultados ${rangeDone.from}-${rangeDone.to} de ${rangeDone.total} — fim da lista.`,
+          `Página ${pageNo} concluída · ${rangeDone ? `Resultados ${rangeDone.from}-${rangeDone.to} de ${rangeDone.total}` : `nextFrom=${vendasCursor.nextFrom}/${listTotal}`} — fim da lista.`,
         );
         break;
       }
@@ -1379,14 +1507,69 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
       const bucketsBeforeNext = pageBuckets.length;
       const moved = await gotoNextResultsPage(page, pageBuckets, vendasCursor);
       if (!moved) {
-        scrapeLog("Fim da paginação.");
-        break;
+        // Se ainda falta lista pelo total conhecido, força mais tentativas manuais
+        if (
+          listTotal != null &&
+          vendasCursor.nextFrom != null &&
+          vendasCursor.nextFrom <= listTotal &&
+          vendasCursor.lastUrl
+        ) {
+          scrapeLog(
+            `Paginação: clique/API falhou com nextFrom=${vendasCursor.nextFrom}/${listTotal} — retentando fetch manual…`,
+          );
+          vendasCursor.preferManual = true;
+          const pageSize =
+            rangeDone ? Math.max(1, rangeDone.to - rangeDone.from + 1) : 15;
+          let recovered = false;
+          for (let retry = 1; retry <= 5; retry++) {
+            assertNotCancelled();
+            const ok = await pushManualVendasPage(
+              page,
+              pageBuckets,
+              vendasCursor,
+              vendasCursor.nextFrom,
+              pageSize,
+            );
+            if (ok) {
+              recovered = true;
+              break;
+            }
+            await sleep(1500 * retry);
+          }
+          if (!recovered) {
+            scrapeLog(
+              `Fim da paginação sem cobrir o total (nextFrom=${vendasCursor.nextFrom}/${listTotal}).`,
+            );
+            break;
+          }
+        } else {
+          scrapeLog("Fim da paginação.");
+          break;
+        }
       }
       if (pageBuckets.length <= bucketsBeforeNext) {
         scrapeLog(
-          "Paginação: avanço confirmado sem bucket novo — encerrando por segurança.",
+          "Paginação: avanço sem bucket novo — forçando fetch manual se houver URL…",
         );
-        break;
+        if (vendasCursor.lastUrl && vendasCursor.nextFrom != null) {
+          vendasCursor.preferManual = true;
+          const pageSize =
+            rangeDone ? Math.max(1, rangeDone.to - rangeDone.from + 1) : 15;
+          const ok = await pushManualVendasPage(
+            page,
+            pageBuckets,
+            vendasCursor,
+            vendasCursor.nextFrom,
+            pageSize,
+          );
+          if (!ok || pageBuckets.length <= bucketsBeforeNext) {
+            scrapeLog("Paginação: sem bucket novo — encerrando.");
+            break;
+          }
+        } else {
+          scrapeLog("Paginação: sem URL/cursor — encerrando por segurança.");
+          break;
+        }
       }
       pageNo += 1;
     }
