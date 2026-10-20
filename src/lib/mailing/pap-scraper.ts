@@ -14,12 +14,25 @@ import {
   defaultScrapeProgress,
 } from "@/lib/mailing/store";
 import { extractPapAddress } from "@/lib/mailing/address";
+import {
+  compareBrDate,
+  formatBrDate,
+  isoToBrDate,
+  parseBrDate,
+  splitDateRangeDaily,
+  windowsFromResume,
+  type BrDateParts,
+  type DateWindow,
+} from "@/lib/mailing/pap-date-windows";
 import { resolveMailingPlanLabel } from "@/lib/mailing/plan-map";
 import {
   buildVendasUrlForFrom,
   inferNextVendasUrl,
 } from "@/lib/mailing/pap-vendas-url";
 import type { LeadPartData, MailingLead, ScrapeProgress } from "@/lib/mailing/types";
+
+/** PAP bloqueia / falha auth após ~500 registros na mesma consulta. */
+const PAP_SAFE_LIST_LIMIT = 480;
 import { ensureDataDirs, MAILING_LIVE_DIR, MAILING_LIVE_SHOT } from "@/lib/paths";
 
 const PAP_HOME = "https://pap.niointernet.com.br/";
@@ -92,18 +105,6 @@ function sleep(ms: number) {
 
 async function humanPause(min = 900, max = 1800) {
   await sleep(min + Math.floor(Math.random() * (max - min)));
-}
-
-function parseBrDate(value: string) {
-  const m = value.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!m) return null;
-  return { day: Number(m[1]), month: Number(m[2]), year: Number(m[3]) };
-}
-
-function formatBrDate(parts: { day: number; month: number; year: number }) {
-  const dd = String(parts.day).padStart(2, "0");
-  const mm = String(parts.month).padStart(2, "0");
-  return `${dd}/${mm}/${parts.year}`;
 }
 
 const MONTHS_PT = [
@@ -936,7 +937,19 @@ type VendasApiCursor = {
   authHeader: string | null;
   /** true se o param page da API começa em 0 (senão assume 1-based, padrão PAP). */
   pageZeroBased: boolean | null;
+  /** Último fetch manual/API recebeu 401 / sessão inválida. */
+  authBlocked: boolean;
 };
+
+function resetVendasCursor(cursor: VendasApiCursor) {
+  cursor.prevUrl = null;
+  cursor.lastUrl = null;
+  cursor.preferManual = false;
+  cursor.nextFrom = null;
+  cursor.authHeader = null;
+  cursor.pageZeroBased = null;
+  cursor.authBlocked = false;
+}
 
 function resolveManualVendasUrl(
   cursor: VendasApiCursor,
@@ -981,6 +994,13 @@ async function fetchVendasByUrl(
     if (res.ok()) {
       json = (await res.json()) as VendasListJson;
     } else {
+      if (status === 401 || status === 403) {
+        cursor.authBlocked = true;
+        scrapeLog(
+          `Paginação: fetch manual HTTP ${status} (sessão/bloqueio) — marcando relogin.`,
+        );
+        return null;
+      }
       scrapeLog(`Paginação: fetch manual HTTP ${status} — tentando fetch in-page…`);
     }
 
@@ -1016,6 +1036,12 @@ async function fetchVendasByUrl(
         status = inPage.status;
         if (inPage.status >= 200 && inPage.status < 300) {
           json = inPage.body as VendasListJson;
+        } else if (inPage.status === 401 || inPage.status === 403) {
+          cursor.authBlocked = true;
+          scrapeLog(
+            `Paginação: fetch in-page HTTP ${inPage.status} (sessão/bloqueio) — marcando relogin.`,
+          );
+          return null;
         } else {
           scrapeLog(`Paginação: fetch in-page HTTP ${inPage.status}`);
         }
@@ -1023,6 +1049,7 @@ async function fetchVendasByUrl(
     }
 
     if (!json) {
+      if (status === 401 || status === 403) cursor.authBlocked = true;
       scrapeLog(`Paginação: fetch manual sem JSON (HTTP ${status}).`);
       return null;
     }
@@ -1033,6 +1060,7 @@ async function fetchVendasByUrl(
       );
       return null;
     }
+    cursor.authBlocked = false;
     scrapeLog(
       `API vendas (manual): ${vendas.length} registro(s)${typeof json.data?.total === "number" ? ` · total=${json.data.total}` : ""}.`,
     );
@@ -1319,6 +1347,71 @@ async function gotoNextResultsPage(
   return false;
 }
 
+async function applyHistoricoFilters(
+  page: Page,
+  pageBuckets: Array<Record<string, unknown>[]>,
+  cursor: VendasApiCursor,
+  params: {
+    saleType: PapSaleType;
+    tipoLabel: "Interesse" | "Venda";
+    from: BrDateParts;
+    to: BrDateParts;
+    fromBr: string;
+    toBr: string;
+  },
+) {
+  assertNotCancelled();
+  scrapeLog(`Abrindo filtros · Tipo = ${params.tipoLabel} · ${params.fromBr} → ${params.toBr}`);
+  await openFilters(page);
+  await captureLiveShot(page, "filtros-abertos");
+  assertNotCancelled();
+  await selectTipo(page, params.tipoLabel);
+  scrapeLog(`Tipo selecionado: ${params.tipoLabel}`);
+
+  if (params.saleType === "venda") {
+    assertNotCancelled();
+    scrapeLog(`Selecionando Status Primário = ${STATUS_PRIMARIO_VENDA}`);
+    await selectStatusPrimario(page, STATUS_PRIMARIO_VENDA);
+    scrapeLog("Status Primário OK (Aguardando tratamento).");
+  }
+
+  assertNotCancelled();
+  const v1 = await pickCalendarDate(page, "De", params.from);
+  scrapeLog(`Data De = ${v1}`);
+  assertNotCancelled();
+  const v2 = await pickCalendarDate(page, "Até", params.to);
+  scrapeLog(`Data Até = ${v2}`);
+  if (v1.trim() !== params.fromBr.trim() || v2.trim() !== params.toBr.trim()) {
+    throw new Error(
+      `Datas não bateram (pedido ${params.fromBr}→${params.toBr}, PAP De=${v1}, Até=${v2}).`,
+    );
+  }
+
+  assertNotCancelled();
+  scrapeLog("Aplicando filtros no PAP (aguarde a lista)…");
+  pageBuckets.length = 0;
+  resetVendasCursor(cursor);
+  await applyFilter(page);
+  await captureLiveShot(page, "filtrando");
+  await closeDrawer(page);
+  await captureLiveShot(page, "lista");
+  scrapeLog("Filtros aplicados · lendo lista.");
+  await tryIncreaseRowsPerPage(page);
+}
+
+async function reloginPapFresh(
+  page: Page,
+  email: string,
+  password: string,
+) {
+  scrapeLog("Limpando sessão e fazendo login de novo no PAP…");
+  await page.context().clearCookies().catch(() => undefined);
+  await page.goto(PAP_HOME, { waitUntil: "domcontentloaded", timeout: 90000 }).catch(() => undefined);
+  await humanPause(800, 1200);
+  await loginPap(page, email, password);
+  await captureLiveShot(page, "relogin-ok");
+}
+
 export async function runPapHistoricoScrape(options: PapScrapeOptions) {
   const from = parseBrDate(options.dateFrom);
   const to = parseBrDate(options.dateTo);
@@ -1380,6 +1473,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
 
     const pageBuckets: Array<Record<string, unknown>[]> = [];
     let listTotal: number | null = null;
+    let lastImportedDateBr: string | null = null;
     const vendasCursor: VendasApiCursor = {
       prevUrl: null,
       lastUrl: null,
@@ -1387,6 +1481,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
       nextFrom: null,
       authHeader: null,
       pageZeroBased: null,
+      authBlocked: false,
     };
     page.on("request", (req) => {
       try {
@@ -1419,6 +1514,9 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         const method = res.request().method();
         if (method !== "GET" && method !== "POST") return;
         if (res.status() < 200 || res.status() >= 300) {
+          if (res.status() === 401 || res.status() === 403) {
+            vendasCursor.authBlocked = true;
+          }
           scrapeLog(
             `API vendas HTTP ${res.status()} ${method} — ${res.url().slice(0, 160)}`,
           );
@@ -1459,205 +1557,278 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     assertNotCancelled();
     await loginPap(page, creds.email, creds.password);
     await captureLiveShot(page, "historico");
-    assertNotCancelled();
 
-    scrapeLog(`Abrindo filtros · Tipo = ${tipoLabel}`);
-    await openFilters(page);
-    await captureLiveShot(page, "filtros-abertos");
-    assertNotCancelled();
-    await selectTipo(page, tipoLabel);
-    scrapeLog(`Tipo selecionado: ${tipoLabel}`);
-    await captureLiveShot(page, `tipo-${tipoLabel.toLowerCase()}`);
-
-    if (saleType === "venda") {
-      assertNotCancelled();
-      scrapeLog(`Selecionando Status Primário = ${STATUS_PRIMARIO_VENDA}`);
-      await selectStatusPrimario(page, STATUS_PRIMARIO_VENDA);
-      scrapeLog("Status Primário OK (Aguardando tratamento).");
-      await captureLiveShot(page, "status-aguardando");
-    }
-
-    assertNotCancelled();
-    scrapeLog(`Definindo período exatamente como na tela: ${options.dateFrom} → ${options.dateTo}`);
-    const v1 = await pickCalendarDate(page, "De", from);
-    scrapeLog(`Data De = ${v1}`);
-    await captureLiveShot(page, "data-de");
-    assertNotCancelled();
-    const v2 = await pickCalendarDate(page, "Até", to);
-    scrapeLog(`Data Até = ${v2}`);
-    await captureLiveShot(page, "data-ate");
-    if (v1.trim() !== options.dateFrom.trim() || v2.trim() !== options.dateTo.trim()) {
-      throw new Error(
-        `Datas não bateram com o formulário (pedido ${options.dateFrom}→${options.dateTo}, PAP De=${v1}, Até=${v2}).`,
-      );
-    }
-
-    assertNotCancelled();
-    scrapeLog("Aplicando filtros no PAP (aguarde a lista)…");
-    pageBuckets.length = 0;
-    await applyFilter(page);
-    await captureLiveShot(page, "filtrando");
-    await closeDrawer(page);
-    await captureLiveShot(page, "lista");
-    scrapeLog("Filtros aplicados · lendo lista (sem Avançar/Detalhar).");
-    await tryIncreaseRowsPerPage(page);
-    const range0 = await readResultadosRange(page);
-    if (range0) {
-      listTotal = range0.total;
-      scrapeLog(
-        `Lista UI: Resultados ${range0.from}-${range0.to} de ${range0.total}`,
-      );
-    }
-
-    // Venda e Interesse: mailing sai da lista (/api/portal/vendas).
-    // Paginação: seta > até to >= total (ex.: 1202). Nunca >|.
+    // Janelas de data: começa no período pedido; se total > ~480 ou 401,
+    // reloga e continua do último dia importado (evita bloqueio do PAP).
+    let windows: DateWindow[] = [
+      { from, to, fromBr: options.dateFrom, toBr: options.dateTo },
+    ];
+    let windowIndex = 0;
+    let splitDone = false;
+    let resumePasses = 0;
     const maxPages = options.maxPages ?? 5000;
-    let pageNo = 1;
-    let consumedBuckets = 0;
-    while (pageNo <= maxPages) {
+    const MAX_RESUME = 20;
+
+    while (windowIndex < windows.length) {
       assertNotCancelled();
-      const rangeNow = await readResultadosRange(page);
+      const win = windows[windowIndex]!;
       scrapeLog(
-        saleType === "venda"
-          ? `Lendo página ${pageNo} (Venda / Aguardando tratamento)${rangeNow ? ` · ${rangeNow.from}-${rangeNow.to}/${rangeNow.total}` : ""}…`
-          : `Lendo página ${pageNo} de interesses${rangeNow ? ` · ${rangeNow.from}-${rangeNow.to}/${rangeNow.total}` : ""}…`,
-        { page: pageNo },
+        `Janela ${windowIndex + 1}/${windows.length}: ${win.fromBr} → ${win.toBr}`,
       );
 
-      // Espera captura da API desta página (novo bucket após Filtrar / próxima)
-      for (let w = 0; w < 40 && pageBuckets.length <= consumedBuckets; w++) {
-        await sleep(500);
+      await applyHistoricoFilters(page, pageBuckets, vendasCursor, {
+        saleType,
+        tipoLabel,
+        from: win.from,
+        to: win.to,
+        fromBr: win.fromBr,
+        toBr: win.toBr,
+      });
+
+      const range0 = await readResultadosRange(page);
+      if (range0) {
+        listTotal = range0.total;
+        scrapeLog(
+          `Lista UI: Resultados ${range0.from}-${range0.to} de ${range0.total}`,
+        );
       }
-      const latest =
-        pageBuckets.length > consumedBuckets
-          ? pageBuckets[pageBuckets.length - 1] || []
-          : pageBuckets[pageBuckets.length - 1] || [];
-      consumedBuckets = pageBuckets.length;
-      // Nunca recuar nextFrom pela UI quando já estamos em modo API (label trava).
-      if (vendasCursor.preferManual) {
-        if (vendasCursor.nextFrom == null && rangeNow) {
-          vendasCursor.nextFrom = rangeNow.to + 1;
-        }
-      } else if (rangeNow) {
-        const uiNext = rangeNow.to + 1;
-        if (vendasCursor.nextFrom == null || uiNext > vendasCursor.nextFrom) {
-          vendasCursor.nextFrom = uiNext;
-        }
-      } else if (latest.length && vendasCursor.nextFrom == null) {
-        vendasCursor.nextFrom = latest.length + 1;
+
+      // Primeira consulta grande demais → divide em dias e recomeça
+      if (
+        !splitDone &&
+        windows.length === 1 &&
+        range0 &&
+        range0.total > PAP_SAFE_LIST_LIMIT
+      ) {
+        scrapeLog(
+          `Total ${range0.total} > ${PAP_SAFE_LIST_LIMIT} — PAP bloqueia ~500. Dividindo em dias e relogando…`,
+        );
+        splitDone = true;
+        windows = splitDateRangeDaily(from, to);
+        await reloginPapFresh(page, creds.email, creds.password);
+        windowIndex = 0;
+        continue;
       }
-      scrapeLog(
-        `Página ${pageNo}: ${latest.length} linha(s) na captura da API${listTotal != null ? ` · meta total=${listTotal}` : ""}${vendasCursor.nextFrom != null ? ` · nextFrom=${vendasCursor.nextFrom}` : ""}${vendasCursor.preferManual ? " · API-manual" : ""}.`,
-      );
-      await captureLiveShot(page, `pagina-${pageNo}`);
-      for (const venda of latest) {
+
+      let pageNo = 1;
+      let consumedBuckets = 0;
+      let needResume = false;
+
+      while (pageNo <= maxPages) {
         assertNotCancelled();
-        const papId = String(venda._id || venda.numeroPedido || "");
-        if (!papId || seenIds.has(papId)) continue;
-        seenIds.add(papId);
-
-        if (saleType === "venda" && !matchesVendaAguardandoTratamento(venda)) {
-          const st = String(venda.status || venda.chaveStatusPrimario || "");
-          scrapeLog(`Pulando (status ≠ Aguardando tratamento): ${st}`);
-          updateProgress({
-            skipped: loadScrapeProgress().skipped + 1,
-            processed: loadScrapeProgress().processed + 1,
-          });
-          continue;
+        if (vendasCursor.authBlocked) {
+          scrapeLog("Sessão/API bloqueada (401) — preparando relogin…");
+          needResume = true;
+          break;
         }
 
-        const draft = mapVendaToLead(venda, saleType);
-        if (!draft.name || !draft.phone) {
-          scrapeLog(
-            `Sem nome/telefone — pulando pedido ${String(venda.numeroPedido || papId)}`,
-          );
-          updateProgress({
-            skipped: loadScrapeProgress().skipped + 1,
-            processed: loadScrapeProgress().processed + 1,
-          });
-          continue;
+        const rangeNow = await readResultadosRange(page);
+        scrapeLog(
+          saleType === "venda"
+            ? `Lendo página ${pageNo} (Venda)${rangeNow ? ` · ${rangeNow.from}-${rangeNow.to}/${rangeNow.total}` : ""}…`
+            : `Lendo página ${pageNo}${rangeNow ? ` · ${rangeNow.from}-${rangeNow.to}/${rangeNow.total}` : ""}…`,
+          { page: pageNo },
+        );
+
+        for (let w = 0; w < 40 && pageBuckets.length <= consumedBuckets; w++) {
+          await sleep(500);
         }
-        await updateLeads((leads) => {
-          // Venda: importa mesmo com CPF já cadastrado (pedido/papId ainda deduplica)
-          const result = upsertLeadByKey(
-            leads,
-            {
-              ...draft,
-              id: newId("lead"),
-            },
-            { allowDuplicateCpf: saleType === "venda" },
-          );
-          if (result.skipped && result.skipReason === "cpf") {
-            scrapeLog(
-              `Ignorado CPF já cadastrado: ${draft.name} · CPF ${draft.document || "—"} · pedido ${draft.part1?.numeroPedido || ""}`,
-              {
-                skipped: loadScrapeProgress().skipped + 1,
-                processed: loadScrapeProgress().processed + 1,
-                lastLeadName: draft.name,
-              },
-            );
-          } else if (result.created) {
-            collected.push(result.lead);
-            scrapeLog(
-              `Importado: ${result.lead.name} · ${result.lead.part1?.numeroPedido || ""} · ${result.lead.phone}`,
-              {
-                imported: loadScrapeProgress().imported + 1,
-                processed: loadScrapeProgress().processed + 1,
-                lastLeadName: result.lead.name,
-              },
-            );
-          } else {
-            scrapeLog(`Já existia (sem novo CPF): ${result.lead.name}`, {
+        const latest =
+          pageBuckets.length > consumedBuckets
+            ? pageBuckets[pageBuckets.length - 1] || []
+            : pageBuckets[pageBuckets.length - 1] || [];
+        consumedBuckets = pageBuckets.length;
+
+        if (vendasCursor.preferManual) {
+          if (vendasCursor.nextFrom == null && rangeNow) {
+            vendasCursor.nextFrom = rangeNow.to + 1;
+          }
+        } else if (rangeNow) {
+          const uiNext = rangeNow.to + 1;
+          if (vendasCursor.nextFrom == null || uiNext > vendasCursor.nextFrom) {
+            vendasCursor.nextFrom = uiNext;
+          }
+        } else if (latest.length && vendasCursor.nextFrom == null) {
+          vendasCursor.nextFrom = latest.length + 1;
+        }
+
+        scrapeLog(
+          `Página ${pageNo}: ${latest.length} linha(s)${listTotal != null ? ` · meta=${listTotal}` : ""}${vendasCursor.nextFrom != null ? ` · nextFrom=${vendasCursor.nextFrom}` : ""}${vendasCursor.preferManual ? " · API-manual" : ""}.`,
+        );
+        await captureLiveShot(page, `pagina-${pageNo}`);
+
+        for (const venda of latest) {
+          assertNotCancelled();
+          const papId = String(venda._id || venda.numeroPedido || "");
+          if (!papId || seenIds.has(papId)) continue;
+          seenIds.add(papId);
+
+          if (saleType === "venda" && !matchesVendaAguardandoTratamento(venda)) {
+            const st = String(venda.status || venda.chaveStatusPrimario || "");
+            scrapeLog(`Pulando (status ≠ Aguardando tratamento): ${st}`);
+            updateProgress({
               skipped: loadScrapeProgress().skipped + 1,
               processed: loadScrapeProgress().processed + 1,
-              lastLeadName: result.lead.name,
             });
+            continue;
           }
-          return result.leads;
-        });
-        // Pace like a human scanning each row
-        await humanPause(400, 900);
-      }
 
-      const rangeDone = await readResultadosRange(page);
-      const apiPastEnd =
-        listTotal != null &&
-        vendasCursor.nextFrom != null &&
-        vendasCursor.nextFrom > listTotal;
-      const uiAtEnd =
-        rangeDone &&
-        rangeDone.to >= rangeDone.total &&
-        (vendasCursor.nextFrom == null || vendasCursor.nextFrom > rangeDone.total);
-      if (apiPastEnd || uiAtEnd) {
-        scrapeLog(
-          `Página ${pageNo} concluída · ${rangeDone ? `Resultados ${rangeDone.from}-${rangeDone.to} de ${rangeDone.total}` : `nextFrom=${vendasCursor.nextFrom}/${listTotal}`} — fim da lista.`,
-        );
-        break;
-      }
-      scrapeLog(`Página ${pageNo} concluída · avançando paginação…`);
-      if (pageNo >= maxPages) {
-        scrapeLog(`Limite de ${maxPages} páginas atingido — parei a paginação.`);
-        break;
-      }
-      const bucketsBeforeNext = pageBuckets.length;
-      const moved = await gotoNextResultsPage(page, pageBuckets, vendasCursor);
-      if (!moved) {
-        // Se ainda falta lista pelo total conhecido, força mais tentativas manuais
-        if (
+          const draft = mapVendaToLead(venda, saleType);
+          if (!draft.name || !draft.phone) {
+            scrapeLog(
+              `Sem nome/telefone — pulando pedido ${String(venda.numeroPedido || papId)}`,
+            );
+            updateProgress({
+              skipped: loadScrapeProgress().skipped + 1,
+              processed: loadScrapeProgress().processed + 1,
+            });
+            continue;
+          }
+
+          const leadDateBr = isoToBrDate(
+            String(venda.dataCriacao || draft.saleDate || draft.part1?.dataCriacao || ""),
+          );
+          if (leadDateBr) {
+            if (
+              !lastImportedDateBr ||
+              compareBrDate(leadDateBr, lastImportedDateBr) >= 0
+            ) {
+              lastImportedDateBr = leadDateBr;
+            }
+          }
+
+          await updateLeads((leads) => {
+            const result = upsertLeadByKey(
+              leads,
+              {
+                ...draft,
+                id: newId("lead"),
+              },
+              { allowDuplicateCpf: saleType === "venda" },
+            );
+            if (result.skipped && result.skipReason === "cpf") {
+              scrapeLog(
+                `Ignorado CPF já cadastrado: ${draft.name} · CPF ${draft.document || "—"} · pedido ${draft.part1?.numeroPedido || ""}`,
+                {
+                  skipped: loadScrapeProgress().skipped + 1,
+                  processed: loadScrapeProgress().processed + 1,
+                  lastLeadName: draft.name,
+                },
+              );
+            } else if (result.created) {
+              collected.push(result.lead);
+              scrapeLog(
+                `Importado: ${result.lead.name} · ${result.lead.part1?.numeroPedido || ""} · ${result.lead.phone}`,
+                {
+                  imported: loadScrapeProgress().imported + 1,
+                  processed: loadScrapeProgress().processed + 1,
+                  lastLeadName: result.lead.name,
+                },
+              );
+            } else {
+              scrapeLog(`Já existia: ${result.lead.name}`, {
+                skipped: loadScrapeProgress().skipped + 1,
+                processed: loadScrapeProgress().processed + 1,
+                lastLeadName: result.lead.name,
+              });
+            }
+            return result.leads;
+          });
+          await humanPause(400, 900);
+        }
+
+        const rangeDone = await readResultadosRange(page);
+        const apiPastEnd =
           listTotal != null &&
           vendasCursor.nextFrom != null &&
-          vendasCursor.nextFrom <= listTotal &&
-          vendasCursor.lastUrl
+          vendasCursor.nextFrom > listTotal;
+        const uiAtEnd =
+          rangeDone &&
+          rangeDone.to >= rangeDone.total &&
+          (vendasCursor.nextFrom == null ||
+            vendasCursor.nextFrom > rangeDone.total);
+        if (apiPastEnd || uiAtEnd) {
+          scrapeLog(
+            `Janela ${win.fromBr}→${win.toBr} concluída · ${rangeDone ? `${rangeDone.from}-${rangeDone.to}/${rangeDone.total}` : "fim"}.`,
+          );
+          break;
+        }
+
+        // Proteção: se já passou de ~480 nesta consulta, força relogin+retomada
+        if (
+          rangeDone &&
+          rangeDone.to >= PAP_SAFE_LIST_LIMIT &&
+          rangeDone.to < rangeDone.total
         ) {
           scrapeLog(
-            `Paginação: clique/API falhou com nextFrom=${vendasCursor.nextFrom}/${listTotal} — retentando fetch manual…`,
+            `Limite seguro ${PAP_SAFE_LIST_LIMIT} atingido (UI ${rangeDone.to}/${rangeDone.total}) — relogin e retoma da data do último lead.`,
           );
-          vendasCursor.preferManual = true;
-          const pageSize =
-            rangeDone ? Math.max(1, rangeDone.to - rangeDone.from + 1) : 15;
-          let recovered = false;
-          for (let retry = 1; retry <= 5; retry++) {
-            assertNotCancelled();
+          needResume = true;
+          break;
+        }
+
+        scrapeLog(`Página ${pageNo} concluída · avançando…`);
+        if (pageNo >= maxPages) break;
+
+        const bucketsBeforeNext = pageBuckets.length;
+        const moved = await gotoNextResultsPage(page, pageBuckets, vendasCursor);
+        if (vendasCursor.authBlocked) {
+          needResume = true;
+          break;
+        }
+        if (!moved) {
+          if (
+            listTotal != null &&
+            vendasCursor.nextFrom != null &&
+            vendasCursor.nextFrom <= listTotal &&
+            vendasCursor.lastUrl
+          ) {
+            scrapeLog(
+              `Paginação falhou nextFrom=${vendasCursor.nextFrom}/${listTotal} — retentando…`,
+            );
+            vendasCursor.preferManual = true;
+            const pageSize = rangeDone
+              ? Math.max(1, rangeDone.to - rangeDone.from + 1)
+              : 15;
+            let recovered = false;
+            for (let retry = 1; retry <= 3; retry++) {
+              assertNotCancelled();
+              if (vendasCursor.authBlocked) break;
+              const ok = await pushManualVendasPage(
+                page,
+                pageBuckets,
+                vendasCursor,
+                vendasCursor.nextFrom,
+                pageSize,
+              );
+              if (ok) {
+                recovered = true;
+                break;
+              }
+              if (vendasCursor.authBlocked) break;
+              await sleep(1200 * retry);
+            }
+            if (vendasCursor.authBlocked || !recovered) {
+              needResume = true;
+              scrapeLog(
+                `Não cobriu o total (nextFrom=${vendasCursor.nextFrom}/${listTotal}) — vai relogar/retomar.`,
+              );
+              break;
+            }
+          } else {
+            break;
+          }
+        }
+        if (pageBuckets.length <= bucketsBeforeNext) {
+          if (vendasCursor.authBlocked) {
+            needResume = true;
+            break;
+          }
+          if (vendasCursor.lastUrl && vendasCursor.nextFrom != null) {
+            vendasCursor.preferManual = true;
+            const pageSize = rangeDone
+              ? Math.max(1, rangeDone.to - rangeDone.from + 1)
+              : 15;
             const ok = await pushManualVendasPage(
               page,
               pageBuckets,
@@ -1665,48 +1836,45 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
               vendasCursor.nextFrom,
               pageSize,
             );
-            if (ok) {
-              recovered = true;
+            if (vendasCursor.authBlocked || !ok || pageBuckets.length <= bucketsBeforeNext) {
+              needResume = true;
               break;
             }
-            await sleep(1500 * retry);
-          }
-          if (!recovered) {
-            scrapeLog(
-              `Fim da paginação sem cobrir o total (nextFrom=${vendasCursor.nextFrom}/${listTotal}).`,
-            );
+          } else {
             break;
           }
-        } else {
-          scrapeLog("Fim da paginação.");
+        }
+        pageNo += 1;
+      }
+
+      if (needResume) {
+        resumePasses += 1;
+        if (resumePasses > MAX_RESUME) {
+          scrapeLog(`Limite de ${MAX_RESUME} retomadas — encerrando.`);
           break;
         }
-      }
-      if (pageBuckets.length <= bucketsBeforeNext) {
+        const resumeBr =
+          lastImportedDateBr &&
+          compareBrDate(lastImportedDateBr, options.dateTo) <= 0
+            ? lastImportedDateBr
+            : win.fromBr;
         scrapeLog(
-          "Paginação: avanço sem bucket novo — forçando fetch manual se houver URL…",
+          `RETOMADA #${resumePasses}: relogin + filtro ${resumeBr} → ${options.dateTo} (último importado nesta data). Já importados ficam pulados.`,
         );
-        if (vendasCursor.lastUrl && vendasCursor.nextFrom != null) {
-          vendasCursor.preferManual = true;
-          const pageSize =
-            rangeDone ? Math.max(1, rangeDone.to - rangeDone.from + 1) : 15;
-          const ok = await pushManualVendasPage(
-            page,
-            pageBuckets,
-            vendasCursor,
-            vendasCursor.nextFrom,
-            pageSize,
-          );
-          if (!ok || pageBuckets.length <= bucketsBeforeNext) {
-            scrapeLog("Paginação: sem bucket novo — encerrando.");
-            break;
-          }
-        } else {
-          scrapeLog("Paginação: sem URL/cursor — encerrando por segurança.");
+        await reloginPapFresh(page, creds.email, creds.password);
+        const resumeWindows = windowsFromResume(resumeBr, options.dateTo);
+        if (!resumeWindows.length) {
+          scrapeLog("Nada a retomar (data já no fim do período).");
           break;
         }
+        // Sempre dias a partir da data do último lead até o fim pedido
+        windows = resumeWindows;
+        splitDone = true;
+        windowIndex = 0;
+        continue;
       }
-      pageNo += 1;
+
+      windowIndex += 1;
     }
 
     scrapeLog(
