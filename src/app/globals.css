@@ -371,6 +371,30 @@
   color: #bae6fd;
 }
 
+.mailing-seller-chips {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.mailing-seller-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 1.85rem;
+  padding: 0 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(125, 211, 252, 0.35);
+  background: rgba(14, 116, 144, 0.25);
+  color: #e0f2fe;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mailing-seller-chip:hover {
+  border-color: rgba(186, 230, 253, 0.55);
+  background: rgba(14, 165, 233, 0.35);
+}
+
 .mailing-seller-row-active td {
   background: rgba(14, 165, 233, 0.12);
 }

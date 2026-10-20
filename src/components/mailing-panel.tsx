@@ -770,7 +770,35 @@ export function MailingPanel() {
               Ver todos
             </Button>
           </div>
-        ) : null}
+        ) : (
+          <div className="mailing-seller-chips">
+            <span className="text-xs uppercase tracking-wider text-white/50">
+              Filas dos vendedores
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {users
+                .filter((u) => String(u.role) === "vendedor" && u.active !== false)
+                .map((u) => {
+                  const id = String(u.id);
+                  const name = String(u.name);
+                  const username = String(u.username);
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      className="mailing-seller-chip"
+                      title={`Ver fila de ${name}`}
+                      onClick={() =>
+                        openSellerQueue({ id, name, username, role: "vendedor" })
+                      }
+                    >
+                      {name}
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
+        )}
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {(
@@ -1099,63 +1127,7 @@ export function MailingPanel() {
             <aside className="mailing-admin-dock">
               <div className="mailing-admin-dock-inner space-y-4">
 
-            <section className="mailing-panel space-y-4 p-5">
-              <h2 className="mailing-title text-lg">Mailing externo (Excel)</h2>
-              <p className="text-sm text-white/65">
-                Obrigatório: <strong>nome</strong> e <strong>telefone</strong>. Baixe o modelo.
-              </p>
-              <div className="flex flex-wrap gap-3">
-                <a href="/api/mailing/excel" className="mailing-link-btn">
-                  Baixar modelo
-                </a>
-                <label className="mailing-link-btn cursor-pointer">
-                  Enviar Excel
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void uploadExcel(f);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-              </div>
-            </section>
-
-            <section className="mailing-panel space-y-4 p-5">
-              <h2 className="mailing-title text-lg">Cadastro manual</h2>
-              <form onSubmit={saveManual} className="grid gap-3">
-                <Input
-                  placeholder="Nome *"
-                  value={manual.name}
-                  onChange={(e) => setManual({ ...manual, name: e.target.value })}
-                  required
-                />
-                <Input
-                  placeholder="Telefone *"
-                  value={manual.phone}
-                  onChange={(e) => setManual({ ...manual, phone: e.target.value })}
-                  required
-                />
-                <Input
-                  placeholder="CPF (opcional)"
-                  value={manual.document}
-                  onChange={(e) => setManual({ ...manual, document: e.target.value })}
-                />
-                <Textarea
-                  placeholder="Observações"
-                  value={manual.notes}
-                  onChange={(e) => setManual({ ...manual, notes: e.target.value })}
-                />
-                <Button type="submit" className="mailing-cta">
-                  Adicionar à fila transferir
-                </Button>
-              </form>
-            </section>
-
-            <section className="mailing-panel space-y-4 p-5">
+<section className="mailing-panel space-y-4 p-5">
               <h2 className="mailing-title text-lg">Usuários</h2>
               <form onSubmit={createSeller} className="mailing-user-create">
                 <Input
@@ -1290,7 +1262,63 @@ export function MailingPanel() {
                 </table>
               </div>
             </section>
+
+<section className="mailing-panel space-y-4 p-5">
+              <h2 className="mailing-title text-lg">Mailing externo (Excel)</h2>
+              <p className="text-sm text-white/65">
+                Obrigatório: <strong>nome</strong> e <strong>telefone</strong>. Baixe o modelo.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <a href="/api/mailing/excel" className="mailing-link-btn">
+                  Baixar modelo
+                </a>
+                <label className="mailing-link-btn cursor-pointer">
+                  Enviar Excel
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void uploadExcel(f);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
               </div>
+            </section>
+
+<section className="mailing-panel space-y-4 p-5">
+              <h2 className="mailing-title text-lg">Cadastro manual</h2>
+              <form onSubmit={saveManual} className="grid gap-3">
+                <Input
+                  placeholder="Nome *"
+                  value={manual.name}
+                  onChange={(e) => setManual({ ...manual, name: e.target.value })}
+                  required
+                />
+                <Input
+                  placeholder="Telefone *"
+                  value={manual.phone}
+                  onChange={(e) => setManual({ ...manual, phone: e.target.value })}
+                  required
+                />
+                <Input
+                  placeholder="CPF (opcional)"
+                  value={manual.document}
+                  onChange={(e) => setManual({ ...manual, document: e.target.value })}
+                />
+                <Textarea
+                  placeholder="Observações"
+                  value={manual.notes}
+                  onChange={(e) => setManual({ ...manual, notes: e.target.value })}
+                />
+                <Button type="submit" className="mailing-cta">
+                  Adicionar à fila transferir
+                </Button>
+              </form>
+            </section>
+</div>
             </aside>
           </div>
         ) : (
