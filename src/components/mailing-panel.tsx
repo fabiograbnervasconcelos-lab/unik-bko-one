@@ -84,6 +84,8 @@ export function MailingPanel() {
     role: "vendedor",
   });
   const [users, setUsers] = useState<Array<Record<string, unknown>>>([]);
+  /** Nova senha digitada por userId (somente master). */
+  const [passwordEdits, setPasswordEdits] = useState<Record<string, string>>({});
   const [pending, startTransition] = useTransition();
 
   async function refreshMe() {
@@ -416,6 +418,31 @@ export function MailingPanel() {
     setMessage(`Usuário criado: ${data.user?.username}`);
     await refreshUsers();
     await refreshLeads();
+  }
+
+  async function changeUserPassword(userId: string, username: string) {
+    const password = (passwordEdits[userId] || "").trim();
+    if (password.length < 4) {
+      setMessage("Informe a nova senha (mínimo 4 caracteres).");
+      return;
+    }
+    const res = await fetch("/api/mailing/users", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId, password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setMessage(data.error || "Falha ao trocar senha.");
+      return;
+    }
+    setPasswordEdits((prev) => {
+      const next = { ...prev };
+      delete next[userId];
+      return next;
+    });
+    setMessage(`Senha de ${username} atualizada.`);
+    await refreshUsers();
   }
 
   if (boot) {
@@ -1084,6 +1111,12 @@ export function MailingPanel() {
                 </select>
                 <Button type="submit">Criar</Button>
               </form>
+              {user.role === "master" ? (
+                <p className="text-xs text-white/55">
+                  Master: informe a nova senha na linha do vendedor e clique em{" "}
+                  <strong className="text-white/80">Trocar senha</strong>.
+                </p>
+              ) : null}
               <div className="overflow-x-auto">
                 <table className="mailing-table w-full text-sm">
                   <thead>
@@ -1092,17 +1125,61 @@ export function MailingPanel() {
                       <th>Login</th>
                       <th>Perfil</th>
                       <th>Ativo</th>
+                      {user.role === "master" ? <th>Nova senha</th> : null}
                     </tr>
                   </thead>
                   <tbody>
-                    {users.map((u) => (
-                      <tr key={String(u.id)}>
-                        <td>{String(u.name)}</td>
-                        <td>{String(u.username)}</td>
-                        <td>{String(u.role)}</td>
-                        <td>{u.active ? "sim" : "não"}</td>
-                      </tr>
-                    ))}
+                    {users.map((u) => {
+                      const id = String(u.id);
+                      const role = String(u.role);
+                      const username = String(u.username);
+                      const canReset = user.role === "master" && role !== "master";
+                      return (
+                        <tr key={id}>
+                          <td>{String(u.name)}</td>
+                          <td>{username}</td>
+                          <td>{role}</td>
+                          <td>{u.active ? "sim" : "não"}</td>
+                          {user.role === "master" ? (
+                            <td>
+                              {canReset ? (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Input
+                                    type="password"
+                                    placeholder="Nova senha"
+                                    className="h-8 w-36"
+                                    value={passwordEdits[id] || ""}
+                                    onChange={(e) =>
+                                      setPasswordEdits((prev) => ({
+                                        ...prev,
+                                        [id]: e.target.value,
+                                      }))
+                                    }
+                                    autoComplete="new-password"
+                                  />
+                                  <Button
+                                    type="button"
+                                    size="xs"
+                                    variant="secondary"
+                                    disabled={
+                                      pending ||
+                                      !(passwordEdits[id] || "").trim()
+                                    }
+                                    onClick={() =>
+                                      void changeUserPassword(id, username)
+                                    }
+                                  >
+                                    Trocar senha
+                                  </Button>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-white/40">—</span>
+                              )}
+                            </td>
+                          ) : null}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
