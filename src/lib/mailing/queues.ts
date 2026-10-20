@@ -116,18 +116,31 @@ export async function moveLeadQueue(params: {
         if (!isOwner) throw new Error("Lead de outro vendedor.");
       }
 
+      const reopeningToTratando =
+        params.queue === "tratando" &&
+        (lead.queue === "sem_interesse" ||
+          lead.queue === "sem_resposta" ||
+          lead.queue === "vendido" ||
+          lead.queue === "transferir");
+
       const next: MailingLead = {
         ...lead,
         queue: params.queue,
         updatedAt: nowIso,
         treatingSince:
-          params.queue === "tratando" ? lead.treatingSince || nowIso : lead.treatingSince,
+          params.queue === "tratando"
+            ? reopeningToTratando
+              ? nowIso
+              : lead.treatingSince || nowIso
+            : lead.treatingSince,
         closedAt:
           params.queue === "sem_interesse" ||
           params.queue === "sem_resposta" ||
           params.queue === "vendido"
             ? nowIso
-            : null,
+            : params.queue === "tratando" || params.queue === "transferir"
+              ? null
+              : lead.closedAt,
         assignedTo:
           params.queue === "transferir"
             ? null
@@ -138,11 +151,17 @@ export async function moveLeadQueue(params: {
             : lead.assignedAt || (isOwner ? nowIso : lead.assignedAt),
       };
 
-      // Ao abrir (vindo de transferir implícito) — se manager manda para tratando sem assigned
+      // Ao abrir (vindo de transferir / reabrir contato) — garante dono + timer 24h
       if (params.queue === "tratando" && !next.assignedTo && isOwner) {
         next.assignedTo = params.actorId;
         next.assignedAt = nowIso;
         next.treatingSince = nowIso;
+      }
+      if (params.queue === "tratando" && reopeningToTratando && isOwner) {
+        next.assignedTo = next.assignedTo || params.actorId;
+        next.assignedAt = next.assignedAt || nowIso;
+        next.treatingSince = nowIso;
+        next.closedAt = null;
       }
 
       updated = next;
