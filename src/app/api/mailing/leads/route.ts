@@ -50,7 +50,10 @@ export async function GET(request: Request) {
           all.filter((l) => l.assignedTo === user.id),
           user.id,
         )
-      : queueCounts(all);
+      : sellerId
+        ? // Master/admin inspecionando a fila de um vendedor (só leads dele)
+          queueCounts(all.filter((l) => l.assignedTo === sellerId))
+        : queueCounts(all);
 
   const sellers = loadUsers()
     .filter((u) => u.active && (u.role === "vendedor" || u.role === "admin"))

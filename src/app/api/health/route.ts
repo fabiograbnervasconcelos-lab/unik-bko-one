@@ -27,7 +27,7 @@ export async function GET() {
       ok: true,
       ts: Date.now(),
       gitSha: sha.slice(0, 12),
-      buildId: "mailing-pap-20261020f",
+      buildId: "mailing-pap-20261020h",
       appMode: getAppMode(),
       features: {
         vendorBot,
