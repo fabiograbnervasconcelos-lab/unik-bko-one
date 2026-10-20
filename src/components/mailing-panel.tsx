@@ -757,9 +757,11 @@ export function MailingPanel() {
             <p className="text-sm text-sky-100">
               Fila de{" "}
               <strong>
-                {users.find((u) => String(u.id) === viewSellerId)?.name ||
-                  sellers.find((s) => s.id === viewSellerId)?.name ||
-                  "vendedor"}
+                {String(
+                  users.find((u) => String(u.id) === viewSellerId)?.name ||
+                    sellers.find((s) => s.id === viewSellerId)?.name ||
+                    "vendedor",
+                )}
               </strong>
               {" — "}
               contadores e lista só deste vendedor.
@@ -857,11 +859,11 @@ export function MailingPanel() {
             <h2 className="mailing-title text-lg">
               Leads — {queue}
               {viewSellerId
-                ? ` · ${
+                ? ` · ${String(
                     users.find((u) => String(u.id) === viewSellerId)?.name ||
-                    sellers.find((s) => s.id === viewSellerId)?.name ||
-                    "vendedor"
-                  }`
+                      sellers.find((s) => s.id === viewSellerId)?.name ||
+                      "vendedor",
+                  )}`
                 : ""}
             </h2>
             <div className="flex gap-2">
