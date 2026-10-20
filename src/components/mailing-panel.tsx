@@ -61,6 +61,8 @@ export function MailingPanel() {
   const [sellers, setSellers] = useState<Seller[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [sellerId, setSellerId] = useState("");
+  /** Master/admin: filtrar leads pela fila deste vendedor (null = todos). */
+  const [viewSellerId, setViewSellerId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [message, setMessage] = useState("");
   const [dateFrom, setDateFrom] = useState("16/10/2026");
@@ -100,8 +102,16 @@ export function MailingPanel() {
     return data.user as SessionUser;
   }
 
-  async function refreshLeads(activeQueue = queue, activeSearch = search) {
-    const params = new URLSearchParams({ queue: activeQueue, search: activeSearch });
+  async function refreshLeads(
+    activeQueue = queue,
+    activeSearch = search,
+    activeSellerView: string | null = viewSellerId,
+  ) {
+    const params = new URLSearchParams({
+      queue: activeQueue,
+      search: activeSearch,
+    });
+    if (activeSellerView) params.set("sellerId", activeSellerView);
     const res = await fetch(`/api/mailing/leads?${params}`, { cache: "no-store" });
     if (!res.ok) return;
     const data = await res.json();
@@ -109,6 +119,34 @@ export function MailingPanel() {
     setCounts(data.counts || null);
     setSellers(data.sellers || []);
     if (!sellerId && data.sellers?.[0]?.id) setSellerId(data.sellers[0].id);
+  }
+
+  function openSellerQueue(seller: {
+    id: string;
+    name: string;
+    username?: string;
+    role?: string;
+  }) {
+    // Só filas de vendedor — master/admin usam o painel geral.
+    if (seller.role && seller.role !== "vendedor") {
+      return;
+    }
+    setViewSellerId(seller.id);
+    setSellerId(seller.id);
+    setQueue("tratando");
+    setSelected([]);
+    setMessage(
+      `Fila de ${seller.name} — cards mostram só os leads deste vendedor. Clique em «Ver todos» para voltar.`,
+    );
+    void refreshLeads("tratando", search, seller.id);
+  }
+
+  function clearSellerView() {
+    setViewSellerId(null);
+    setQueue("transferir");
+    setSelected([]);
+    setMessage("");
+    void refreshLeads("transferir", search, null);
   }
 
   async function refreshUsers() {
@@ -711,6 +749,550 @@ export function MailingPanel() {
           </section>
         ) : null}
 
+        {isManager ? (
+          <div className="mailing-work-layout">
+            <div className="mailing-work-main space-y-6 min-w-0">
+        {viewSellerId ? (
+          <div className="mailing-seller-view-bar">
+            <p className="text-sm text-sky-100">
+              Fila de{" "}
+              <strong>
+                {users.find((u) => String(u.id) === viewSellerId)?.name ||
+                  sellers.find((s) => s.id === viewSellerId)?.name ||
+                  "vendedor"}
+              </strong>
+              {" — "}
+              contadores e lista só deste vendedor.
+            </p>
+            <Button type="button" variant="secondary" size="sm" onClick={clearSellerView}>
+              Ver todos
+            </Button>
+          </div>
+        ) : null}
+
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {(
+            [
+              ["transferir", "Transferir"],
+              ["tratando", "Tratando"],
+              ["sem_interesse", "Sem interesse"],
+              ["sem_resposta", "Sem resposta"],
+              ["vendido", "Vendido"],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className={`mailing-stat ${queue === key ? "active" : ""}`}
+              onClick={() => {
+                setQueue(key);
+                setSelected([]);
+                void refreshLeads(key, search, viewSellerId);
+              }}
+            >
+              <span className="text-xs uppercase tracking-wider text-white/60">{label}</span>
+              <span className="text-2xl font-semibold text-white">
+                {counts?.[key] ?? 0}
+              </span>
+            </button>
+          ))}
+        </section>
+
+        {isManager && !viewSellerId ? (
+          <section className="mailing-panel space-y-4 p-5">
+            <h2 className="mailing-title text-lg">Distribuir mailing</h2>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-[220px] flex-1 space-y-2">
+                <Label>Vendedor</Label>
+                <select
+                  className="mailing-select"
+                  value={sellerId}
+                  onChange={(e) => setSellerId(e.target.value)}
+                >
+                  {sellers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.username})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!leads.length || queue !== "transferir"}
+                onClick={() => selectRandom(10)}
+              >
+                Selecionar 10 aleatórios
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!leads.length || queue !== "transferir"}
+                onClick={() => selectRandom(20)}
+              >
+                Selecionar 20 aleatórios
+              </Button>
+              <Button
+                disabled={!selected.length || !sellerId}
+                onClick={() => transfer(selected)}
+              >
+                Transferir selecionados ({selected.length})
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={!leads.length || !sellerId || queue !== "transferir"}
+                onClick={() => transfer(leads.map((l) => l.id))}
+              >
+                Transferir todos da fila
+              </Button>
+            </div>
+            <p className="text-xs text-white/50">
+              Na fila Transferir: use 10/20 aleatórios, escolha o vendedor e transfira de uma vez.
+            </p>
+          </section>
+        ) : null}
+
+        <section className="mailing-panel space-y-4 p-5">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <h2 className="mailing-title text-lg">
+              Leads — {queue}
+              {viewSellerId
+                ? ` · ${
+                    users.find((u) => String(u.id) === viewSellerId)?.name ||
+                    sellers.find((s) => s.id === viewSellerId)?.name ||
+                    "vendedor"
+                  }`
+                : ""}
+            </h2>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Buscar nome/telefone…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-56"
+              />
+              <Button
+                variant="outline"
+                onClick={() => refreshLeads(queue, search, viewSellerId)}
+              >
+                Filtrar
+              </Button>
+            </div>
+          </div>
+          {isManager ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!leads.length}
+                onClick={selectAllVisible}
+              >
+                Selecionar todos ({leads.length})
+              </Button>
+              {!viewSellerId ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!leads.length || queue !== "transferir"}
+                    onClick={() => selectRandom(10)}
+                  >
+                    10 aleatórios
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!leads.length || queue !== "transferir"}
+                    onClick={() => selectRandom(20)}
+                  >
+                    20 aleatórios
+                  </Button>
+                </>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!selected.length}
+                onClick={clearSelection}
+              >
+                Limpar seleção
+              </Button>
+              {!viewSellerId ? (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  disabled={!selected.length}
+                  onClick={() => void excludeSelected()}
+                >
+                  Excluir selecionados ({selected.length})
+                </Button>
+              ) : null}
+              <span className="text-xs text-white/50">
+                {viewSellerId
+                  ? "Visualizando só a fila deste vendedor."
+                  : "Marque manualmente ou use selecionar todos para remover clientes que não quer mais."}
+              </span>
+            </div>
+          ) : null}
+          <div className="overflow-x-auto">
+            <table className="mailing-table w-full text-left text-sm">
+              <thead>
+                <tr>
+                  {isManager ? (
+                    <th className="w-10">
+                      <input
+                        type="checkbox"
+                        aria-label="Selecionar todos"
+                        checked={Boolean(leads.length) && selected.length === leads.length}
+                        onChange={(e) => {
+                          if (e.target.checked) selectAllVisible();
+                          else clearSelection();
+                        }}
+                      />
+                    </th>
+                  ) : null}
+                  <th>Tipo</th>
+                  <th>Pedido</th>
+                  <th>Nome</th>
+                  <th>Telefone</th>
+                  <th>Endereço</th>
+                  <th>Nº</th>
+                  <th>Bairro</th>
+                  <th>Cidade</th>
+                  <th>Status</th>
+                  <th>Plano</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leads.map((lead) => {
+                  const rua =
+                    lead.part2?.endereco ||
+                    lead.address ||
+                    "—";
+                  const numero = lead.part2?.numero || "—";
+                  const bairro = lead.part2?.bairro || "—";
+                  const cidade =
+                    lead.part2?.cidade ||
+                    lead.city ||
+                    "—";
+                  return (
+                  <tr key={lead.id}>
+                    {isManager ? (
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(lead.id)}
+                          onChange={() => toggleSelect(lead.id)}
+                        />
+                      </td>
+                    ) : null}
+                    <td className="uppercase text-sky-200">
+                      {lead.saleType || "interesse"}
+                    </td>
+                    <td className="font-mono text-xs text-white/90">
+                      {lead.part1?.numeroPedido || lead.papId || "—"}
+                    </td>
+                    <td>
+                      <div className="font-medium text-white">{lead.name}</div>
+                    </td>
+                    <td>{lead.phone}</td>
+                    <td className="max-w-[200px] text-xs text-white/85">{rua}</td>
+                    <td className="whitespace-nowrap text-xs text-white/85">
+                      {numero}
+                    </td>
+                    <td className="max-w-[140px] text-xs text-white/85">{bairro}</td>
+                    <td className="whitespace-nowrap text-xs text-white/85">
+                      {cidade}
+                      {lead.part2?.uf || lead.state
+                        ? `/${lead.part2?.uf || lead.state}`
+                        : ""}
+                    </td>
+                    <td>{lead.part1?.status || "—"}</td>
+                    <td>{lead.plan || lead.planData?.plano || "—"}</td>
+                    <td className="space-x-1 whitespace-nowrap">
+                      {user.role === "vendedor" || isManager ? (
+                        <>
+                          {lead.queue === "tratando" || lead.queue === "transferir" ? (
+                            <>
+                              <Button
+                                size="xs"
+                                variant="secondary"
+                                onClick={() => moveQueue(lead.id, "sem_interesse")}
+                              >
+                                Sem interesse
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => moveQueue(lead.id, "sem_resposta")}
+                              >
+                                Sem resposta
+                              </Button>
+                              <Button
+                                size="xs"
+                                className="mailing-cta"
+                                onClick={() => moveQueue(lead.id, "vendido")}
+                              >
+                                Vendido
+                              </Button>
+                            </>
+                          ) : null}
+                          {lead.queue === "transferir" && user.role === "vendedor" ? (
+                            <Button
+                              size="xs"
+                              onClick={() => moveQueue(lead.id, "tratando")}
+                            >
+                              Tratar
+                            </Button>
+                          ) : null}
+                          {(lead.queue === "sem_interesse" ||
+                            lead.queue === "sem_resposta" ||
+                            lead.queue === "vendido") &&
+                          (user.role === "vendedor" || isManager) ? (
+                            <Button
+                              size="xs"
+                              variant="secondary"
+                              onClick={() => moveQueue(lead.id, "tratando")}
+                              title="Reabre o contato na fila Tratando"
+                            >
+                              Voltar a tratando
+                            </Button>
+                          ) : null}
+                          {isManager && lead.queue !== "transferir" ? (
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => moveQueue(lead.id, "transferir")}
+                            >
+                              Voltar fila
+                            </Button>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </td>
+                  </tr>
+                  );
+                })}
+                {!leads.length ? (
+                  <tr>
+                    <td
+                      colSpan={isManager ? 12 : 11}
+                      className="py-8 text-center text-white/50"
+                    >
+                      Nenhum lead nesta fila.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+            </div>
+            <aside className="mailing-admin-dock">
+              <div className="mailing-admin-dock-inner space-y-4">
+
+            <section className="mailing-panel space-y-4 p-5">
+              <h2 className="mailing-title text-lg">Mailing externo (Excel)</h2>
+              <p className="text-sm text-white/65">
+                Obrigatório: <strong>nome</strong> e <strong>telefone</strong>. Baixe o modelo.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <a href="/api/mailing/excel" className="mailing-link-btn">
+                  Baixar modelo
+                </a>
+                <label className="mailing-link-btn cursor-pointer">
+                  Enviar Excel
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void uploadExcel(f);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="mailing-panel space-y-4 p-5">
+              <h2 className="mailing-title text-lg">Cadastro manual</h2>
+              <form onSubmit={saveManual} className="grid gap-3">
+                <Input
+                  placeholder="Nome *"
+                  value={manual.name}
+                  onChange={(e) => setManual({ ...manual, name: e.target.value })}
+                  required
+                />
+                <Input
+                  placeholder="Telefone *"
+                  value={manual.phone}
+                  onChange={(e) => setManual({ ...manual, phone: e.target.value })}
+                  required
+                />
+                <Input
+                  placeholder="CPF (opcional)"
+                  value={manual.document}
+                  onChange={(e) => setManual({ ...manual, document: e.target.value })}
+                />
+                <Textarea
+                  placeholder="Observações"
+                  value={manual.notes}
+                  onChange={(e) => setManual({ ...manual, notes: e.target.value })}
+                />
+                <Button type="submit" className="mailing-cta">
+                  Adicionar à fila transferir
+                </Button>
+              </form>
+            </section>
+
+            <section className="mailing-panel space-y-4 p-5">
+              <h2 className="mailing-title text-lg">Usuários</h2>
+              <form onSubmit={createSeller} className="mailing-user-create">
+                <Input
+                  placeholder="Nome"
+                  value={newUser.name}
+                  onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+                  required
+                />
+                <Input
+                  placeholder="Login"
+                  value={newUser.username}
+                  onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
+                  required
+                />
+                <Input
+                  placeholder="Senha"
+                  type="password"
+                  value={newUser.password}
+                  onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                  required
+                />
+                <select
+                  className="mailing-select"
+                  value={newUser.role}
+                  onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+                >
+                  <option value="vendedor">Vendedor</option>
+                  <option value="admin">Administrador</option>
+                </select>
+                <Button type="submit">Criar</Button>
+              </form>
+              <p className="text-xs text-white/55">
+                Clique no <strong className="text-sky-200">nome do vendedor</strong> para ver
+                a fila dele (tratando, sem resposta, etc.).
+              </p>
+              {user.role === "master" ? (
+                <p className="text-xs text-white/55">
+                  Master: informe a nova senha na linha do vendedor e clique em{" "}
+                  <strong className="text-white/80">Trocar senha</strong>.
+                </p>
+              ) : null}
+              <div className="overflow-x-auto">
+                <table className="mailing-table w-full text-sm">
+                  <thead>
+                    <tr>
+                      <th>Nome</th>
+                      <th>Login</th>
+                      <th>Perfil</th>
+                      <th>Ativo</th>
+                      {user.role === "master" ? <th>Nova senha</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map((u) => {
+                      const id = String(u.id);
+                      const role = String(u.role);
+                      const username = String(u.username);
+                      const name = String(u.name);
+                      const canReset = user.role === "master" && role !== "master";
+                      const canOpenQueue = role === "vendedor";
+                      const isActiveView = viewSellerId === id;
+                      return (
+                        <tr
+                          key={id}
+                          className={isActiveView ? "mailing-seller-row-active" : undefined}
+                        >
+                          <td>
+                            {canOpenQueue ? (
+                              <button
+                                type="button"
+                                className="mailing-seller-link"
+                                title={`Ver fila de ${name}`}
+                                onClick={() =>
+                                  openSellerQueue({
+                                    id,
+                                    name,
+                                    username,
+                                    role,
+                                  })
+                                }
+                              >
+                                {name}
+                              </button>
+                            ) : (
+                              name
+                            )}
+                          </td>
+                          <td>{username}</td>
+                          <td>{role}</td>
+                          <td>{u.active ? "sim" : "não"}</td>
+                          {user.role === "master" ? (
+                            <td>
+                              {canReset ? (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Input
+                                    type="password"
+                                    placeholder="Nova senha"
+                                    className="h-8 w-36"
+                                    value={passwordEdits[id] || ""}
+                                    onChange={(e) =>
+                                      setPasswordEdits((prev) => ({
+                                        ...prev,
+                                        [id]: e.target.value,
+                                      }))
+                                    }
+                                    autoComplete="new-password"
+                                  />
+                                  <Button
+                                    type="button"
+                                    size="xs"
+                                    variant="secondary"
+                                    disabled={
+                                      pending ||
+                                      !(passwordEdits[id] || "").trim()
+                                    }
+                                    onClick={() =>
+                                      void changeUserPassword(id, username)
+                                    }
+                                  >
+                                    Trocar senha
+                                  </Button>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-white/40">—</span>
+                              )}
+                            </td>
+                          ) : null}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+              </div>
+            </aside>
+          </div>
+        ) : (
+          <>
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {(
             [
@@ -1017,175 +1599,9 @@ export function MailingPanel() {
             </table>
           </div>
         </section>
+          </>
+        )}
 
-        {isManager ? (
-          <div className="grid gap-6 lg:grid-cols-2">
-            <section className="mailing-panel space-y-4 p-5">
-              <h2 className="mailing-title text-lg">Mailing externo (Excel)</h2>
-              <p className="text-sm text-white/65">
-                Obrigatório: <strong>nome</strong> e <strong>telefone</strong>. Baixe o modelo.
-              </p>
-              <div className="flex flex-wrap gap-3">
-                <a href="/api/mailing/excel" className="mailing-link-btn">
-                  Baixar modelo
-                </a>
-                <label className="mailing-link-btn cursor-pointer">
-                  Enviar Excel
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void uploadExcel(f);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-              </div>
-            </section>
-
-            <section className="mailing-panel space-y-4 p-5">
-              <h2 className="mailing-title text-lg">Cadastro manual</h2>
-              <form onSubmit={saveManual} className="grid gap-3">
-                <Input
-                  placeholder="Nome *"
-                  value={manual.name}
-                  onChange={(e) => setManual({ ...manual, name: e.target.value })}
-                  required
-                />
-                <Input
-                  placeholder="Telefone *"
-                  value={manual.phone}
-                  onChange={(e) => setManual({ ...manual, phone: e.target.value })}
-                  required
-                />
-                <Input
-                  placeholder="CPF (opcional)"
-                  value={manual.document}
-                  onChange={(e) => setManual({ ...manual, document: e.target.value })}
-                />
-                <Textarea
-                  placeholder="Observações"
-                  value={manual.notes}
-                  onChange={(e) => setManual({ ...manual, notes: e.target.value })}
-                />
-                <Button type="submit" className="mailing-cta">
-                  Adicionar à fila transferir
-                </Button>
-              </form>
-            </section>
-
-            <section className="mailing-panel space-y-4 p-5 lg:col-span-2">
-              <h2 className="mailing-title text-lg">Usuários</h2>
-              <form
-                onSubmit={createSeller}
-                className="grid gap-3 md:grid-cols-5"
-              >
-                <Input
-                  placeholder="Nome"
-                  value={newUser.name}
-                  onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
-                  required
-                />
-                <Input
-                  placeholder="Login"
-                  value={newUser.username}
-                  onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
-                  required
-                />
-                <Input
-                  placeholder="Senha"
-                  type="password"
-                  value={newUser.password}
-                  onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
-                  required
-                />
-                <select
-                  className="mailing-select"
-                  value={newUser.role}
-                  onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
-                >
-                  <option value="vendedor">Vendedor</option>
-                  <option value="admin">Administrador</option>
-                </select>
-                <Button type="submit">Criar</Button>
-              </form>
-              {user.role === "master" ? (
-                <p className="text-xs text-white/55">
-                  Master: informe a nova senha na linha do vendedor e clique em{" "}
-                  <strong className="text-white/80">Trocar senha</strong>.
-                </p>
-              ) : null}
-              <div className="overflow-x-auto">
-                <table className="mailing-table w-full text-sm">
-                  <thead>
-                    <tr>
-                      <th>Nome</th>
-                      <th>Login</th>
-                      <th>Perfil</th>
-                      <th>Ativo</th>
-                      {user.role === "master" ? <th>Nova senha</th> : null}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map((u) => {
-                      const id = String(u.id);
-                      const role = String(u.role);
-                      const username = String(u.username);
-                      const canReset = user.role === "master" && role !== "master";
-                      return (
-                        <tr key={id}>
-                          <td>{String(u.name)}</td>
-                          <td>{username}</td>
-                          <td>{role}</td>
-                          <td>{u.active ? "sim" : "não"}</td>
-                          {user.role === "master" ? (
-                            <td>
-                              {canReset ? (
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <Input
-                                    type="password"
-                                    placeholder="Nova senha"
-                                    className="h-8 w-36"
-                                    value={passwordEdits[id] || ""}
-                                    onChange={(e) =>
-                                      setPasswordEdits((prev) => ({
-                                        ...prev,
-                                        [id]: e.target.value,
-                                      }))
-                                    }
-                                    autoComplete="new-password"
-                                  />
-                                  <Button
-                                    type="button"
-                                    size="xs"
-                                    variant="secondary"
-                                    disabled={
-                                      pending ||
-                                      !(passwordEdits[id] || "").trim()
-                                    }
-                                    onClick={() =>
-                                      void changeUserPassword(id, username)
-                                    }
-                                  >
-                                    Trocar senha
-                                  </Button>
-                                </div>
-                              ) : (
-                                <span className="text-xs text-white/40">—</span>
-                              )}
-                            </td>
-                          ) : null}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          </div>
-        ) : null}
       </main>
     </div>
   );
