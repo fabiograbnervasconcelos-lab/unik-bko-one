@@ -74,8 +74,19 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ user: updated ? publicUser(updated) : null });
     }
     if (body.password) {
-      const updated = await resetUserPassword(body.userId, body.password);
-      return NextResponse.json({ user: updated ? publicUser(updated) : null });
+      if (user.role !== "master") {
+        return NextResponse.json(
+          { error: "Somente o master pode trocar a senha dos vendedores." },
+          { status: 403 },
+        );
+      }
+      const updated = await resetUserPassword(body.userId, body.password, {
+        actorRole: user.role,
+      });
+      return NextResponse.json({
+        user: updated ? publicUser(updated) : null,
+        message: `Senha atualizada para ${updated?.username || "usuário"}.`,
+      });
     }
     return NextResponse.json({ error: "Nada para atualizar." }, { status: 400 });
   } catch (error) {

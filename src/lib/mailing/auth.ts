@@ -101,10 +101,22 @@ export async function setUserActive(userId: string, active: boolean) {
   return users.find((item) => item.id === userId) || null;
 }
 
-export async function resetUserPassword(userId: string, password: string) {
-  if (!password || password.length < 4) throw new Error("Senha muito curta.");
-  const users = await updateUsers((list) =>
-    list.map((item) =>
+export async function resetUserPassword(
+  userId: string,
+  password: string,
+  opts?: { actorRole?: UserRole },
+) {
+  if (!password || password.length < 4) throw new Error("Senha muito curta (mín. 4).");
+  if (opts?.actorRole && opts.actorRole !== "master") {
+    throw new Error("Somente o master pode trocar a senha dos usuários.");
+  }
+  const users = await updateUsers((list) => {
+    const target = list.find((item) => item.id === userId);
+    if (!target) throw new Error("Usuário não encontrado.");
+    if (target.role === "master") {
+      throw new Error("A senha do master não pode ser alterada por aqui.");
+    }
+    return list.map((item) =>
       item.id === userId
         ? {
             ...item,
@@ -112,8 +124,8 @@ export async function resetUserPassword(userId: string, password: string) {
             updatedAt: new Date().toISOString(),
           }
         : item,
-    ),
-  );
+    );
+  });
   return users.find((item) => item.id === userId) || null;
 }
 
