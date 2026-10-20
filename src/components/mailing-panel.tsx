@@ -23,6 +23,7 @@ type Lead = {
   address?: string;
   plan?: string;
   city?: string;
+  state?: string;
   zip?: string;
   queue: "transferir" | "tratando" | "sem_interesse" | "sem_resposta" | "vendido";
   source: string;
