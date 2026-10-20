@@ -27,12 +27,34 @@ export function normalizeAddressParts(
   raw: Record<string, unknown> | null | undefined,
 ): AddressParts {
   if (!raw || typeof raw !== "object") return {};
+  // PAP histório usa localidade (= cidade), logradouro, numero, bairro
   return {
-    logradouro: str(raw.logradouro || raw.endereco || raw.rua || raw.street),
-    numero: str(raw.numero || raw.number || raw.num),
-    complemento: str(raw.complemento || raw.complement || raw.compl),
-    bairro: str(raw.bairro || raw.neighborhood || raw.district),
-    cidade: str(raw.cidade || raw.municipio || raw.city),
+    logradouro: str(
+      raw.logradouro || raw.endereco || raw.rua || raw.street || raw.nomeLogradouro,
+    ),
+    numero: str(raw.numero || raw.number || raw.num || raw.numeroEndereco),
+    complemento: str(
+      raw.complemento ||
+        raw.complement ||
+        raw.compl ||
+        (Array.isArray(raw.complementos)
+          ? (raw.complementos as Array<Record<string, unknown>>)
+              .map((c) => [c.tipo, c.complemento].filter(Boolean).join(" "))
+              .filter(Boolean)
+              .join(" / ")
+          : ""),
+    ),
+    bairro: str(
+      raw.bairro || raw.neighborhood || raw.district || raw.nomeBairro,
+    ),
+    cidade: str(
+      raw.cidade ||
+        raw.localidade ||
+        raw.municipio ||
+        raw.city ||
+        raw.nomeCidade ||
+        raw.nomeMunicipio,
+    ),
     uf: str(raw.uf || raw.estado || raw.state).toUpperCase(),
     cep: str(raw.cep || raw.zip || raw.zipCode).replace(/\s/g, ""),
   };
@@ -74,8 +96,21 @@ export function extractPapAddress(venda: Record<string, unknown>): {
   const dados = (venda.dadosCliente || {}) as Record<string, unknown>;
   const candidates: unknown[] = [];
 
-  if (Array.isArray(venda.enderecos)) candidates.push(...venda.enderecos);
-  if (Array.isArray(dados.enderecos)) candidates.push(...dados.enderecos);
+  const pushEnds = (list: unknown) => {
+    if (!Array.isArray(list)) return;
+    // Prefere endereço de Instalação (PAP envia Instalação + Cobrança)
+    const ranked = [...list].sort((a, b) => {
+      const ta = String((a as Record<string, unknown>)?.tipo || "").toLowerCase();
+      const tb = String((b as Record<string, unknown>)?.tipo || "").toLowerCase();
+      const score = (t: string) =>
+        /instala/.test(t) ? 0 : /cobran/.test(t) ? 2 : 1;
+      return score(ta) - score(tb);
+    });
+    candidates.push(...ranked);
+  };
+
+  pushEnds(venda.enderecos);
+  pushEnds(dados.enderecos);
   if (venda.endereco) candidates.push(venda.endereco);
   if (dados.endereco) candidates.push(dados.endereco);
   if (dados.enderecoInstalacao) candidates.push(dados.enderecoInstalacao);
@@ -87,6 +122,10 @@ export function extractPapAddress(venda: Record<string, unknown>): {
     }
     if (item && typeof item === "object") {
       const parts = normalizeAddressParts(item as Record<string, unknown>);
+      // Exige pelo menos logradouro OU bairro OU cidade (ignora Cobrança vazio)
+      if (!parts.logradouro && !parts.bairro && !parts.cidade && !parts.numero) {
+        continue;
+      }
       const full = formatFullAddress(parts);
       if (full) return { parts, full };
     }
@@ -100,6 +139,8 @@ export function extractPapAddress(venda: Record<string, unknown>): {
     complemento: venda.complemento || dados.complemento,
     bairro: venda.bairro || dados.bairro,
     cidade: venda.cidade || dados.cidade,
+    localidade: venda.localidade || dados.localidade,
+    municipio: venda.municipio || dados.municipio,
     uf: venda.uf || dados.uf,
     cep: venda.cep || dados.cep,
   });
@@ -115,13 +156,17 @@ export function applyAddressToLead(lead: MailingLead): MailingLead {
   const already =
     lead.address === full &&
     lead.part2?.enderecoCompleto === full &&
+    (lead.part2?.endereco || "") === (parts.logradouro || "") &&
+    (lead.part2?.numero || "") === (parts.numero || "") &&
+    (lead.part2?.bairro || "") === (parts.bairro || "") &&
+    (lead.part2?.cidade || "") === (parts.cidade || "") &&
     (lead.city || "") === (parts.cidade || "") &&
     (lead.state || "") === (parts.uf || "") &&
     (lead.zip || "") === (parts.cep || "");
   if (already) return lead;
   return {
     ...lead,
-    address: full,
+    address: parts.logradouro || full,
     city: parts.cidade || lead.city,
     state: parts.uf || lead.state,
     zip: parts.cep || lead.zip,

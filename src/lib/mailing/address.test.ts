@@ -41,6 +41,28 @@ describe("extractPapAddress", () => {
     assert.match(full, /Joinville - SC/);
   });
 
+  it("usa localidade do PAP como cidade e prefere Instalação", () => {
+    const { parts, full } = extractPapAddress({
+      enderecos: [
+        { tipo: "Cobrança", complementos: [] },
+        {
+          tipo: "Instalação",
+          logradouro: "Rua Governador Pedro Ivo Campos",
+          numero: "133",
+          bairro: "Jardim Eldorado",
+          localidade: "Palhoça",
+          uf: "SC",
+          cep: "88133580",
+        },
+      ],
+    });
+    assert.equal(parts.logradouro, "Rua Governador Pedro Ivo Campos");
+    assert.equal(parts.numero, "133");
+    assert.equal(parts.bairro, "Jardim Eldorado");
+    assert.equal(parts.cidade, "Palhoça");
+    assert.match(full, /Palhoça - SC/);
+  });
+
   it("lê dadosCliente.endereco string", () => {
     const { full } = extractPapAddress({
       dadosCliente: { endereco: "Rua A, 10, Centro" },

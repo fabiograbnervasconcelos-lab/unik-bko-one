@@ -840,7 +840,8 @@ function mapVendaToLead(
     phone: onlyPhone(phoneRaw) || phoneRaw,
     document: onlyDigits(String(part1.cpf)) || undefined,
     email: part1.email || undefined,
-    address: enderecoCompleto || undefined,
+    // address = logradouro (rua); cidade/bairro/número ficam em part2 + city
+    address: part2.endereco || enderecoCompleto || undefined,
     city: part2.cidade || undefined,
     state: part2.uf || undefined,
     zip: part2.cep || undefined,

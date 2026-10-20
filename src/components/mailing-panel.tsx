@@ -799,6 +799,9 @@ export function MailingPanel() {
                   <th>Nome</th>
                   <th>Telefone</th>
                   <th>Endereço</th>
+                  <th>Nº</th>
+                  <th>Bairro</th>
+                  <th>Cidade</th>
                   <th>Status</th>
                   <th>Plano</th>
                   <th>Ações</th>
@@ -806,23 +809,15 @@ export function MailingPanel() {
               </thead>
               <tbody>
                 {leads.map((lead) => {
-                  const endereco =
+                  const rua =
+                    lead.part2?.endereco ||
                     lead.address ||
-                    lead.part2?.enderecoCompleto ||
-                    [
-                      lead.part2?.endereco,
-                      lead.part2?.numero,
-                      lead.part2?.complemento,
-                      lead.part2?.bairro,
-                      lead.part2?.cidade && lead.part2?.uf
-                        ? `${lead.part2.cidade} - ${lead.part2.uf}`
-                        : lead.part2?.cidade || lead.city,
-                      lead.part2?.cep || lead.zip
-                        ? `CEP ${lead.part2?.cep || lead.zip}`
-                        : "",
-                    ]
-                      .filter(Boolean)
-                      .join(", ") ||
+                    "—";
+                  const numero = lead.part2?.numero || "—";
+                  const bairro = lead.part2?.bairro || "—";
+                  const cidade =
+                    lead.part2?.cidade ||
+                    lead.city ||
                     "—";
                   return (
                   <tr key={lead.id}>
@@ -843,13 +838,18 @@ export function MailingPanel() {
                     </td>
                     <td>
                       <div className="font-medium text-white">{lead.name}</div>
-                      {lead.city ? (
-                        <div className="text-xs text-white/50">{lead.city}</div>
-                      ) : null}
                     </td>
                     <td>{lead.phone}</td>
-                    <td className="max-w-[240px] text-xs text-white/80">
-                      {endereco}
+                    <td className="max-w-[200px] text-xs text-white/85">{rua}</td>
+                    <td className="whitespace-nowrap text-xs text-white/85">
+                      {numero}
+                    </td>
+                    <td className="max-w-[140px] text-xs text-white/85">{bairro}</td>
+                    <td className="whitespace-nowrap text-xs text-white/85">
+                      {cidade}
+                      {lead.part2?.uf || lead.state
+                        ? `/${lead.part2?.uf || lead.state}`
+                        : ""}
                     </td>
                     <td>{lead.part1?.status || "—"}</td>
                     <td>{lead.plan || lead.planData?.plano || "—"}</td>
@@ -907,7 +907,7 @@ export function MailingPanel() {
                 {!leads.length ? (
                   <tr>
                     <td
-                      colSpan={isManager ? 9 : 8}
+                      colSpan={isManager ? 12 : 11}
                       className="py-8 text-center text-white/50"
                     >
                       Nenhum lead nesta fila.
