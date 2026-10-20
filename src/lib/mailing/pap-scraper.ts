@@ -210,42 +210,175 @@ function isOnPap(url: string) {
   return /pap\.niointernet\.com\.br/i.test(url) && !/login\.microsoftonline|microsoft\.com\/login/i.test(url);
 }
 
+const MS_EMAIL_SEL =
+  "#i0116, input[name='loginfmt'], input[type='email'][name='loginfmt'], input[type='email']";
+const MS_PASS_SEL = "#i0118, input[name='passwd'], input[type='password']";
+
+async function clickIfVisible(page: Page, locator: ReturnType<Page["locator"]>, label: string) {
+  const first = locator.first();
+  if (!(await first.count())) return false;
+  const visible = await first.isVisible().catch(() => false);
+  if (!visible) return false;
+  scrapeLog(label);
+  await first.click({ force: true }).catch(() => undefined);
+  await sleep(1500);
+  return true;
+}
+
+/** true se já parece logado no app PAP (sem tela Microsoft). */
+async function looksLoggedIntoPap(page: Page): Promise<boolean> {
+  const url = page.url();
+  if (!isOnPap(url)) return false;
+  if (/login\.microsoftonline|microsoft\.com\/(login|common)/i.test(url)) return false;
+  if (await page.locator(MS_EMAIL_SEL).first().isVisible().catch(() => false)) return false;
+  // Shell do administrativo / histório
+  const shell = page.locator(
+    "a[href*='historico'], a[href*='administrativo'], [class*='MuiDrawer'], [class*='MuiAppBar'], text=/Hist[oó]rico|Administrativo|Sair|Logout/i",
+  );
+  if (await shell.first().isVisible().catch(() => false)) return true;
+  // Cookie de sessão às vezes já manda direto para a SPA
+  if (/\/administrativo/i.test(url)) return true;
+  return false;
+}
+
+async function resolveMicrosoftEmailField(page: Page) {
+  const direct = page.locator(MS_EMAIL_SEL).first();
+  if (await direct.isVisible().catch(() => false)) return direct;
+  for (const frame of page.frames()) {
+    const loc = frame.locator(MS_EMAIL_SEL).first();
+    if (await loc.isVisible().catch(() => false)) return loc;
+  }
+  return null;
+}
+
+async function resolveMicrosoftPasswordField(page: Page) {
+  const direct = page.locator(MS_PASS_SEL).first();
+  if (await direct.isVisible().catch(() => false)) return direct;
+  for (const frame of page.frames()) {
+    const loc = frame.locator(MS_PASS_SEL).first();
+    if (await loc.isVisible().catch(() => false)) return loc;
+  }
+  return null;
+}
+
 async function loginPap(page: Page, email: string, password: string) {
   scrapeLog(`Abrindo PAP: ${PAP_HOME}`, { currentUrl: PAP_HOME });
   await page.goto(PAP_HOME, { waitUntil: "domcontentloaded", timeout: 90000 });
   scrapeLog(`Página carregada: ${page.url()}`, { currentUrl: page.url() });
   await captureLiveShot(page, "pap-home");
+  assertNotCancelled();
 
-  scrapeLog("Aguardando campo de e-mail Microsoft…");
-  await page.waitForSelector("#i0116", { timeout: 45000 });
-  await humanPause(600, 1000);
-  scrapeLog(`Preenchendo e-mail: ${email}`);
-  await page.fill("#i0116", email);
-  await captureLiveShot(page, "login-email");
-  await humanPause(350, 650);
-  scrapeLog("Clicando Avançar (e-mail)…");
-  await page.click("#idSIButton9");
+  if (await looksLoggedIntoPap(page)) {
+    scrapeLog("Sessão PAP já autenticada — pulando login Microsoft.");
+    await captureLiveShot(page, "ja-logado");
+  } else {
+    // Landing PAP às vezes exige clicar Entrar antes do redirect Microsoft
+    await clickIfVisible(
+      page,
+      page.getByRole("button", { name: /entrar|login|acessar|sign in/i }),
+      "Clicando Entrar na home do PAP…",
+    );
+    await clickIfVisible(
+      page,
+      page.getByRole("link", { name: /entrar|login|acessar|sign in/i }),
+      "Clicando link Entrar na home do PAP…",
+    );
+    await captureLiveShot(page, "pos-entrar-home");
 
-  scrapeLog("Aguardando campo de senha…");
-  await page.waitForSelector("#i0118", { state: "visible", timeout: 45000 });
-  await humanPause(800, 1300);
-  scrapeLog(`Preenchendo senha (${password.length} caracteres)…`);
-  const passInput = page.locator("#i0118");
-  await passInput.click({ force: true });
-  await passInput.fill("");
-  await passInput.pressSequentially(password, { delay: 35 });
-  const typedLen = await passInput.inputValue().then((v) => v.length).catch(() => 0);
-  scrapeLog(`Senha digitada · ${typedLen}/${password.length} caracteres no campo.`);
-  if (typedLen !== password.length) {
-    scrapeLog("Retry fill() na senha (pressSequentially incompleto)…");
-    await passInput.fill(password);
+    scrapeLog("Aguardando campo de e-mail Microsoft…");
+    let emailField = null as Awaited<ReturnType<typeof resolveMicrosoftEmailField>>;
+    const emailDeadline = Date.now() + 60_000;
+    while (Date.now() < emailDeadline && !emailField) {
+      assertNotCancelled();
+      if (await looksLoggedIntoPap(page)) {
+        scrapeLog("Entrou no PAP durante a espera do e-mail — login já ok.");
+        break;
+      }
+      // Seletor de conta Microsoft ("Pick an account")
+      const other = page.locator("#otherTile, [data-test-id='otherTile'], #otherTileText");
+      if (await other.first().isVisible().catch(() => false)) {
+        scrapeLog("Microsoft: escolhendo outra conta…");
+        await other.first().click({ force: true }).catch(() => undefined);
+        await sleep(1200);
+      }
+      const account = page
+        .locator("[data-test-id='accountTile'], #tilesHolder .table, div[role='listitem']")
+        .filter({ hasText: new RegExp(email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") });
+      if (await account.first().isVisible().catch(() => false)) {
+        scrapeLog("Microsoft: selecionando conta salva…");
+        await account.first().click({ force: true }).catch(() => undefined);
+        await sleep(1500);
+      }
+      emailField = await resolveMicrosoftEmailField(page);
+      if (!emailField) {
+        const url = page.url();
+        scrapeLog(`Ainda sem campo e-mail · URL ${url.slice(0, 120)}`);
+        await captureLiveShot(page, "aguardando-email");
+        await sleep(1500);
+      }
+    }
+
+    if (!(await looksLoggedIntoPap(page))) {
+      if (!emailField) {
+        throw new Error(
+          `Timeout aguardando e-mail Microsoft. URL: ${page.url()}. Use Parar e confira login PAP.`,
+        );
+      }
+      await humanPause(600, 1000);
+      scrapeLog(`Preenchendo e-mail: ${email}`);
+      await emailField.click({ force: true }).catch(() => undefined);
+      await emailField.fill(email);
+      await captureLiveShot(page, "login-email");
+      await humanPause(350, 650);
+      scrapeLog("Clicando Avançar (e-mail)…");
+      const nextBtn = page.locator("#idSIButton9, input[type='submit']#idSIButton9").first();
+      if (await nextBtn.count()) {
+        await nextBtn.click({ force: true });
+      } else {
+        await page.keyboard.press("Enter");
+      }
+
+      scrapeLog("Aguardando campo de senha…");
+      let passInput = null as Awaited<ReturnType<typeof resolveMicrosoftPasswordField>>;
+      const passDeadline = Date.now() + 60_000;
+      while (Date.now() < passDeadline && !passInput) {
+        assertNotCancelled();
+        if (await looksLoggedIntoPap(page)) break;
+        passInput = await resolveMicrosoftPasswordField(page);
+        if (!passInput) {
+          await captureLiveShot(page, "aguardando-senha");
+          await sleep(1200);
+        }
+      }
+      if (!(await looksLoggedIntoPap(page))) {
+        if (!passInput) {
+          throw new Error(`Timeout aguardando senha Microsoft. URL: ${page.url()}.`);
+        }
+        await humanPause(800, 1300);
+        scrapeLog(`Preenchendo senha (${password.length} caracteres)…`);
+        await passInput.click({ force: true });
+        await passInput.fill("");
+        await passInput.pressSequentially(password, { delay: 35 });
+        const typedLen = await passInput.inputValue().then((v) => v.length).catch(() => 0);
+        scrapeLog(`Senha digitada · ${typedLen}/${password.length} caracteres no campo.`);
+        if (typedLen !== password.length) {
+          scrapeLog("Retry fill() na senha (pressSequentially incompleto)…");
+          await passInput.fill(password);
+        }
+        await captureLiveShot(page, "login-senha");
+        await humanPause(350, 650);
+        scrapeLog("Clicando Entrar (senha)…");
+        const submit = page.locator("#idSIButton9, input[type='submit']#idSIButton9").first();
+        if (await submit.count()) {
+          await submit.click({ force: true });
+        } else {
+          await page.keyboard.press("Enter");
+        }
+        await sleep(2000);
+        await captureLiveShot(page, "pos-senha");
+      }
+    }
   }
-  await captureLiveShot(page, "login-senha");
-  await humanPause(350, 650);
-  scrapeLog("Clicando Entrar (senha)…");
-  await page.click("#idSIButton9");
-  await sleep(2000);
-  await captureLiveShot(page, "pos-senha");
 
   // Não usar waitForURL(..., load): SPA Microsoft/PAP muitas vezes não dispara "load".
   const deadline = Date.now() + 120_000;

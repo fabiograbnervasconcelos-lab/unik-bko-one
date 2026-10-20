@@ -130,7 +130,7 @@ export function MailingPanel() {
       setLiveShotLabel(data.progress.liveShotLabel || null);
       setLiveShotUrl(`/api/mailing/live-shot?t=${encodeURIComponent(data.progress.liveShotAt)}`);
     }
-    if (data.running) setScrapeRunning(true);
+    if (data.running || data.progress?.state === "running") setScrapeRunning(true);
   }
 
   useEffect(() => {
@@ -545,7 +545,7 @@ export function MailingPanel() {
                 />
               </div>
             </div>
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <Button
                 className="mailing-cta"
                 disabled={pending || scrapeRunning}
@@ -553,36 +553,83 @@ export function MailingPanel() {
               >
                 {scrapeRunning ? "Buscando no PAP…" : "Buscar no PAP"}
               </Button>
-              {scrapeRunning ? (
-                <Button
-                  type="button"
-                  variant="destructive"
-                  disabled={pending}
-                  onClick={stopScrape}
-                >
-                  Parar
-                </Button>
-              ) : null}
+              <Button
+                type="button"
+                variant="destructive"
+                className="mailing-stop-btn"
+                disabled={pending || !scrapeRunning}
+                onClick={stopScrape}
+                title={
+                  scrapeRunning
+                    ? "Interrompe a busca no PAP agora"
+                    : "Disponível enquanto a busca estiver rodando"
+                }
+              >
+                Parar busca
+              </Button>
               {scrapeRunning ? (
                 <span className="self-center text-xs uppercase tracking-wider text-emerald-300">
-                  Log ao vivo · {scrapeState} — pode mudar data/tipo e clicar Parar
+                  Log ao vivo · {scrapeState} — use Parar se travar no login
                 </span>
               ) : null}
             </div>
+            {scrapeRunning ? (
+              <div className="mailing-stop-bar" role="status">
+                <div className="mailing-stop-bar-text">
+                  Busca em andamento
+                  {scrapeState ? ` · ${scrapeState}` : ""}
+                  {liveShotLabel ? ` · ${liveShotLabel}` : ""}
+                </div>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="mailing-stop-btn mailing-stop-btn-lg"
+                  disabled={pending}
+                  onClick={stopScrape}
+                >
+                  Parar agora
+                </Button>
+              </div>
+            ) : null}
             <p className="text-xs text-white/50">
-              Durante a busca, altere data ou tipo e clique em <strong>Parar</strong> para
-              interromper e depois <strong>Buscar no PAP</strong> de novo.
+              Durante a busca, altere data ou tipo e clique em <strong>Parar busca</strong>{" "}
+              para interromper e depois <strong>Buscar no PAP</strong> de novo.
             </p>
             {scrapeMsg ? <p className="text-sm text-sky-200">{scrapeMsg}</p> : null}
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="space-y-2">
-                <Label>
-                  Tela ao vivo do PAP
-                  {liveShotLabel ? (
-                    <span className="ml-2 font-normal text-white/45">· {liveShotLabel}</span>
-                  ) : null}
-                </Label>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Label>
+                    Tela ao vivo do PAP
+                    {liveShotLabel ? (
+                      <span className="ml-2 font-normal text-white/45">· {liveShotLabel}</span>
+                    ) : null}
+                  </Label>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    className="mailing-stop-btn"
+                    disabled={pending || !scrapeRunning}
+                    onClick={stopScrape}
+                  >
+                    Parar
+                  </Button>
+                </div>
                 <div className="mailing-live-frame">
+                  {scrapeRunning ? (
+                    <div className="mailing-live-stop-overlay">
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        className="mailing-stop-btn mailing-stop-btn-lg"
+                        disabled={pending}
+                        onClick={stopScrape}
+                      >
+                        Parar busca
+                      </Button>
+                    </div>
+                  ) : null}
                   {liveShotUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
