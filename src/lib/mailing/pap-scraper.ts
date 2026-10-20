@@ -13,6 +13,7 @@ import {
   upsertLeadByKey,
   defaultScrapeProgress,
 } from "@/lib/mailing/store";
+import { extractPapAddress } from "@/lib/mailing/address";
 import { resolveMailingPlanLabel } from "@/lib/mailing/plan-map";
 import {
   buildVendasUrlForFrom,
@@ -769,8 +770,7 @@ function mapVendaToLead(
   const produtos = (venda.produtos || {}) as Record<string, unknown>;
   const banda = (produtos.bandaLarga || {}) as Record<string, unknown>;
   const vendedor = (venda.vendedor || {}) as Record<string, unknown>;
-  const enderecos = Array.isArray(venda.enderecos) ? (venda.enderecos as Array<Record<string, unknown>>) : [];
-  const end = (enderecos[0] || {}) as Record<string, unknown>;
+  const { parts: endParts, full: enderecoCompleto } = extractPapAddress(venda);
 
   const part1: LeadPartData = {
     nome: String(dados.nome || venda.cliente || ""),
@@ -791,13 +791,14 @@ function mapVendaToLead(
   };
 
   const part2: LeadPartData = {
-    endereco: String(end.logradouro || end.endereco || end.rua || ""),
-    numero: String(end.numero || ""),
-    complemento: String(end.complemento || ""),
-    bairro: String(end.bairro || ""),
-    cidade: String(end.cidade || end.municipio || ""),
-    uf: String(end.uf || end.estado || ""),
-    cep: String(end.cep || ""),
+    endereco: endParts.logradouro || "",
+    numero: endParts.numero || "",
+    complemento: endParts.complemento || "",
+    bairro: endParts.bairro || "",
+    cidade: endParts.cidade || "",
+    uf: endParts.uf || "",
+    cep: endParts.cep || "",
+    enderecoCompleto: enderecoCompleto || "",
     vendedor: String(vendedor.nome || ""),
     matriculaVendedor: String(vendedor.matricula || ""),
     pdv: String(vendedor.pdv || ""),
@@ -839,7 +840,8 @@ function mapVendaToLead(
     phone: onlyPhone(phoneRaw) || phoneRaw,
     document: onlyDigits(String(part1.cpf)) || undefined,
     email: part1.email || undefined,
-    address: [part2.endereco, part2.numero, part2.bairro].filter(Boolean).join(", ") || undefined,
+    // address = logradouro (rua); cidade/bairro/número ficam em part2 + city
+    address: part2.endereco || enderecoCompleto || undefined,
     city: part2.cidade || undefined,
     state: part2.uf || undefined,
     zip: part2.cep || undefined,

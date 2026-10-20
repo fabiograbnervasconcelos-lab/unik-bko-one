@@ -20,9 +20,12 @@ type Lead = {
   phone: string;
   document?: string;
   email?: string;
+  address?: string;
   plan?: string;
   city?: string;
-  queue: "transferir" | "tratando" | "sem_interesse" | "vendido";
+  state?: string;
+  zip?: string;
+  queue: "transferir" | "tratando" | "sem_interesse" | "sem_resposta" | "vendido";
   source: string;
   saleType?: string;
   papId?: string;
@@ -38,6 +41,7 @@ type Counts = {
   transferir: number;
   tratando: number;
   sem_interesse: number;
+  sem_resposta: number;
   vendido: number;
   staleTreating: number;
   total: number;
@@ -659,12 +663,13 @@ export function MailingPanel() {
           </section>
         ) : null}
 
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {(
             [
               ["transferir", "Transferir"],
               ["tratando", "Tratando"],
               ["sem_interesse", "Sem interesse"],
+              ["sem_resposta", "Sem resposta"],
               ["vendido", "Vendido"],
             ] as const
           ).map(([key, label]) => (
@@ -794,13 +799,28 @@ export function MailingPanel() {
                   <th>Pedido</th>
                   <th>Nome</th>
                   <th>Telefone</th>
+                  <th>Endereço</th>
+                  <th>Nº</th>
+                  <th>Bairro</th>
+                  <th>Cidade</th>
                   <th>Status</th>
                   <th>Plano</th>
                   <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
-                {leads.map((lead) => (
+                {leads.map((lead) => {
+                  const rua =
+                    lead.part2?.endereco ||
+                    lead.address ||
+                    "—";
+                  const numero = lead.part2?.numero || "—";
+                  const bairro = lead.part2?.bairro || "—";
+                  const cidade =
+                    lead.part2?.cidade ||
+                    lead.city ||
+                    "—";
+                  return (
                   <tr key={lead.id}>
                     {isManager ? (
                       <td>
@@ -819,11 +839,19 @@ export function MailingPanel() {
                     </td>
                     <td>
                       <div className="font-medium text-white">{lead.name}</div>
-                      {lead.city ? (
-                        <div className="text-xs text-white/50">{lead.city}</div>
-                      ) : null}
                     </td>
                     <td>{lead.phone}</td>
+                    <td className="max-w-[200px] text-xs text-white/85">{rua}</td>
+                    <td className="whitespace-nowrap text-xs text-white/85">
+                      {numero}
+                    </td>
+                    <td className="max-w-[140px] text-xs text-white/85">{bairro}</td>
+                    <td className="whitespace-nowrap text-xs text-white/85">
+                      {cidade}
+                      {lead.part2?.uf || lead.state
+                        ? `/${lead.part2?.uf || lead.state}`
+                        : ""}
+                    </td>
                     <td>{lead.part1?.status || "—"}</td>
                     <td>{lead.plan || lead.planData?.plano || "—"}</td>
                     <td className="space-x-1 whitespace-nowrap">
@@ -837,6 +865,13 @@ export function MailingPanel() {
                                 onClick={() => moveQueue(lead.id, "sem_interesse")}
                               >
                                 Sem interesse
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => moveQueue(lead.id, "sem_resposta")}
+                              >
+                                Sem resposta
                               </Button>
                               <Button
                                 size="xs"
@@ -868,11 +903,12 @@ export function MailingPanel() {
                       ) : null}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
                 {!leads.length ? (
                   <tr>
                     <td
-                      colSpan={isManager ? 8 : 7}
+                      colSpan={isManager ? 12 : 11}
                       className="py-8 text-center text-white/50"
                     >
                       Nenhum lead nesta fila.

@@ -84,7 +84,13 @@ export async function moveLeadQueue(params: {
   actorId: string;
   actorRole: string;
 }): Promise<MailingLead> {
-  const allowed: QueueStatus[] = ["transferir", "tratando", "sem_interesse", "vendido"];
+  const allowed: QueueStatus[] = [
+    "transferir",
+    "tratando",
+    "sem_interesse",
+    "sem_resposta",
+    "vendido",
+  ];
   if (!allowed.includes(params.queue)) {
     throw new Error("Fila inválida.");
   }
@@ -102,7 +108,7 @@ export async function moveLeadQueue(params: {
         throw new Error("Sem permissão para mover este lead.");
       }
 
-      // Vendedor só move entre tratando / sem_interesse / vendido nos próprios leads
+      // Vendedor só move entre tratando / sem_interesse / sem_resposta / vendido
       if (!isManager) {
         if (params.queue === "transferir") {
           throw new Error("Vendedor não pode devolver para a fila transferir.");
@@ -117,7 +123,11 @@ export async function moveLeadQueue(params: {
         treatingSince:
           params.queue === "tratando" ? lead.treatingSince || nowIso : lead.treatingSince,
         closedAt:
-          params.queue === "sem_interesse" || params.queue === "vendido" ? nowIso : null,
+          params.queue === "sem_interesse" ||
+          params.queue === "sem_resposta" ||
+          params.queue === "vendido"
+            ? nowIso
+            : null,
         assignedTo:
           params.queue === "transferir"
             ? null
@@ -152,6 +162,7 @@ export function queueCounts(leads: MailingLead[], sellerId?: string | null) {
     transferir: scoped.filter((l) => l.queue === "transferir").length,
     tratando: scoped.filter((l) => l.queue === "tratando").length,
     sem_interesse: scoped.filter((l) => l.queue === "sem_interesse").length,
+    sem_resposta: scoped.filter((l) => l.queue === "sem_resposta").length,
     vendido: scoped.filter((l) => l.queue === "vendido").length,
     staleTreating: scoped.filter((l) => isStaleTreating(l)).length,
     total: scoped.length,
@@ -172,6 +183,7 @@ export function filterLeads(params: {
         lead.assignedTo === params.forUserId &&
         (lead.queue === "tratando" ||
           lead.queue === "sem_interesse" ||
+          lead.queue === "sem_resposta" ||
           lead.queue === "vendido"),
     );
   }
@@ -184,7 +196,16 @@ export function filterLeads(params: {
   if (params.search?.trim()) {
     const q = params.search.trim().toLowerCase();
     leads = leads.filter((lead) =>
-      [lead.name, lead.phone, lead.document, lead.email, lead.plan, lead.city]
+      [
+        lead.name,
+        lead.phone,
+        lead.document,
+        lead.email,
+        lead.plan,
+        lead.city,
+        lead.address,
+        lead.part2?.enderecoCompleto,
+      ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q)),
     );

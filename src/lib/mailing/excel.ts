@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { formatFullAddress } from "@/lib/mailing/address";
 import { newId } from "@/lib/mailing/crypto";
 import { resolveMailingPlanLabel } from "@/lib/mailing/plan-map";
 import { onlyDigits, onlyPhone, updateLeads, upsertLeadByKey } from "@/lib/mailing/store";
@@ -18,7 +19,10 @@ const DOC_KEYS = ["cpf", "cnpj", "documento", "doc"];
 const EMAIL_KEYS = ["email", "e-mail"];
 const CITY_KEYS = ["cidade", "city", "municipio", "município"];
 const STATE_KEYS = ["uf", "estado", "state"];
-const ADDRESS_KEYS = ["endereco", "endereço", "address", "rua"];
+const ADDRESS_KEYS = ["endereco", "endereço", "address", "rua", "logradouro"];
+const NUMBER_KEYS = ["numero", "número", "number", "num"];
+const COMPLEMENT_KEYS = ["complemento", "complement", "compl"];
+const NEIGHBORHOOD_KEYS = ["bairro", "neighborhood", "district"];
 const ZIP_KEYS = ["cep", "zip"];
 const PLAN_KEYS = ["plano", "plan", "oferta"];
 const PLAN_VALUE_KEYS = ["valor", "valorplano", "preco", "preço", "price", "mensalidade"];
@@ -95,6 +99,19 @@ export async function importExcelLeads(params: {
       }
       const rawDoc = pick(row, DOC_KEYS);
       const document = onlyDigits(rawDoc || "") || undefined;
+      const city = pick(row, CITY_KEYS);
+      const state = pick(row, STATE_KEYS);
+      const zip = pick(row, ZIP_KEYS);
+      const addressFull =
+        formatFullAddress({
+          logradouro: pick(row, ADDRESS_KEYS),
+          numero: pick(row, NUMBER_KEYS),
+          complemento: pick(row, COMPLEMENT_KEYS),
+          bairro: pick(row, NEIGHBORHOOD_KEYS),
+          cidade: city,
+          uf: state,
+          cep: zip,
+        }) || undefined;
       const draft = {
         id: newId("lead"),
         source: "excel" as const,
@@ -103,10 +120,10 @@ export async function importExcelLeads(params: {
         phone: onlyPhone(phone),
         document,
         email: pick(row, EMAIL_KEYS) || undefined,
-        address: pick(row, ADDRESS_KEYS) || undefined,
-        city: pick(row, CITY_KEYS) || undefined,
-        state: pick(row, STATE_KEYS) || undefined,
-        zip: pick(row, ZIP_KEYS) || undefined,
+        address: addressFull,
+        city: city || undefined,
+        state: state || undefined,
+        zip: zip || undefined,
         plan:
           resolveMailingPlanLabel({
             valorPlano: pick(row, PLAN_VALUE_KEYS),
