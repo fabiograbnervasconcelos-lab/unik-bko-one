@@ -4,6 +4,7 @@ export type QueueStatus =
   | "transferir"
   | "tratando"
   | "sem_interesse"
+  | "sem_resposta"
   | "vendido";
 
 export type LeadSource = "pap" | "excel" | "manual";
