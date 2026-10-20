@@ -236,6 +236,27 @@ export function MailingPanel() {
     setSelected([]);
   }
 
+  /** Seleciona até `count` leads aleatórios da lista visível (para transferir). */
+  function selectRandom(count: number) {
+    const ids = leads.map((l) => l.id);
+    if (!ids.length) {
+      setSelected([]);
+      return;
+    }
+    const pool = [...ids];
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = pool[i]!;
+      pool[i] = pool[j]!;
+      pool[j] = tmp;
+    }
+    const picked = pool.slice(0, Math.min(count, pool.length));
+    setSelected(picked);
+    setMessage(
+      `Selecionados ${picked.length} lead(s) aleatório(s) — escolha o vendedor e clique Transferir.`,
+    );
+  }
+
   async function excludeSelected() {
     if (!selected.length) return;
     const ok = window.confirm(
@@ -710,6 +731,22 @@ export function MailingPanel() {
                 </select>
               </div>
               <Button
+                type="button"
+                variant="outline"
+                disabled={!leads.length || queue !== "transferir"}
+                onClick={() => selectRandom(10)}
+              >
+                Selecionar 10 aleatórios
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!leads.length || queue !== "transferir"}
+                onClick={() => selectRandom(20)}
+              >
+                Selecionar 20 aleatórios
+              </Button>
+              <Button
                 disabled={!selected.length || !sellerId}
                 onClick={() => transfer(selected)}
               >
@@ -723,6 +760,9 @@ export function MailingPanel() {
                 Transferir todos da fila
               </Button>
             </div>
+            <p className="text-xs text-white/50">
+              Na fila Transferir: use 10/20 aleatórios, escolha o vendedor e transfira de uma vez.
+            </p>
           </section>
         ) : null}
 
@@ -754,6 +794,24 @@ export function MailingPanel() {
                 onClick={selectAllVisible}
               >
                 Selecionar todos ({leads.length})
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!leads.length || queue !== "transferir"}
+                onClick={() => selectRandom(10)}
+              >
+                10 aleatórios
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!leads.length || queue !== "transferir"}
+                onClick={() => selectRandom(20)}
+              >
+                20 aleatórios
               </Button>
               <Button
                 type="button"
@@ -888,6 +946,19 @@ export function MailingPanel() {
                               onClick={() => moveQueue(lead.id, "tratando")}
                             >
                               Tratar
+                            </Button>
+                          ) : null}
+                          {(lead.queue === "sem_interesse" ||
+                            lead.queue === "sem_resposta" ||
+                            lead.queue === "vendido") &&
+                          (user.role === "vendedor" || isManager) ? (
+                            <Button
+                              size="xs"
+                              variant="secondary"
+                              onClick={() => moveQueue(lead.id, "tratando")}
+                              title="Reabre o contato na fila Tratando"
+                            >
+                              Voltar a tratando
                             </Button>
                           ) : null}
                           {isManager && lead.queue !== "transferir" ? (
