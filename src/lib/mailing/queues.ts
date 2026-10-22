@@ -36,6 +36,8 @@ export async function transferLeads(params: {
   leadIds: string[];
   sellerId: string;
   actorId: string;
+  /** Master/admin: ignora bloqueio de “tratando” > 24h. */
+  force?: boolean;
 }): Promise<{ transferred: MailingLead[]; blocked?: TransferBlockInfo }> {
   const seller = loadUsers().find((user) => user.id === params.sellerId && user.active);
   if (!seller || seller.role === "master") {
@@ -49,7 +51,7 @@ export async function transferLeads(params: {
   }
 
   const block = sellerTransferBlock(seller.id);
-  if (block.blocked) {
+  if (block.blocked && !params.force) {
     return { transferred: [], blocked: block };
   }
 

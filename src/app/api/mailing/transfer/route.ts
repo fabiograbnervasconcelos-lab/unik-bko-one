@@ -14,10 +14,12 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as {
     leadIds?: string[];
     sellerId?: string;
+    force?: boolean;
   } | null;
 
   const leadIds = Array.isArray(body?.leadIds) ? body!.leadIds.filter(Boolean) : [];
   const sellerId = body?.sellerId?.trim() || "";
+  const force = Boolean(body?.force) && canDistribute(user.role);
   if (!leadIds.length || !sellerId) {
     return NextResponse.json(
       { error: "Informe leadIds e o vendedor (sellerId)." },
@@ -30,6 +32,7 @@ export async function POST(request: Request) {
       leadIds,
       sellerId,
       actorId: user.id,
+      force,
     });
     if (result.blocked) {
       return NextResponse.json(
@@ -37,6 +40,7 @@ export async function POST(request: Request) {
           error: result.blocked.reason,
           blocked: result.blocked,
           transferred: [],
+          canForce: canDistribute(user.role),
         },
         { status: 409 },
       );
@@ -44,6 +48,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       transferred: result.transferred,
       count: result.transferred.length,
+      forced: force,
     });
   } catch (error) {
     return NextResponse.json(
