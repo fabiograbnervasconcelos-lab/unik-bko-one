@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import { applyAddressToLead } from "@/lib/mailing/address";
 import { canDistribute, getSessionUser } from "@/lib/mailing/auth";
 import { applyPlanMapToLead } from "@/lib/mailing/plan-map";
-import { filterLeads, moveLeadQueue, queueCounts } from "@/lib/mailing/queues";
+import {
+  filterLeads,
+  moveLeadQueue,
+  queueCounts,
+  sellerTransferBlock,
+} from "@/lib/mailing/queues";
 import { loadLeads, loadUsers, updateLeads } from "@/lib/mailing/store";
 import type { QueueStatus } from "@/lib/mailing/types";
 
@@ -57,7 +62,17 @@ export async function GET(request: Request) {
 
   const sellers = loadUsers()
     .filter((u) => u.active && (u.role === "vendedor" || u.role === "admin"))
-    .map((u) => ({ id: u.id, name: u.name, username: u.username, role: u.role }));
+    .map((u) => {
+      const block = sellerTransferBlock(u.id);
+      return {
+        id: u.id,
+        name: u.name,
+        username: u.username,
+        role: u.role,
+        transferBlocked: Boolean(block.blocked),
+        staleTreating: block.staleCount || 0,
+      };
+    });
 
   return NextResponse.json({ leads, counts, sellers });
 }

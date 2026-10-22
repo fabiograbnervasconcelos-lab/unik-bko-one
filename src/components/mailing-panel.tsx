@@ -47,12 +47,26 @@ type Counts = {
   total: number;
 };
 
-type Seller = { id: string; name: string; username: string; role: string };
+type Seller = {
+  id: string;
+  name: string;
+  username: string;
+  role: string;
+  transferBlocked?: boolean;
+  staleTreating?: number;
+};
 
 export function MailingPanel() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [boot, setBoot] = useState(true);
   const [username, setUsername] = useState("fabio");
+  const [messageTone, setMessageTone] = useState<"ok" | "error">("ok");
+  const [pendingForceTransfer, setPendingForceTransfer] = useState<{
+    ids: string[];
+    sellerId: string;
+    reason: string;
+    staleCount?: number;
+  } | null>(null);
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [queue, setQueue] = useState<string>("transferir");
@@ -320,19 +334,59 @@ export function MailingPanel() {
     await refreshMe();
   }
 
-  async function transfer(ids: string[]) {
+  async function transfer(
+    ids: string[],
+    opts?: { force?: boolean; sellerId?: string },
+  ) {
     setMessage("");
+    setMessageTone("ok");
+    if (!opts?.force) setPendingForceTransfer(null);
+    const targetSeller = opts?.sellerId || sellerId;
     const res = await fetch("/api/mailing/transfer", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ leadIds: ids, sellerId }),
+      body: JSON.stringify({
+        leadIds: ids,
+        sellerId: targetSeller,
+        force: Boolean(opts?.force),
+      }),
     });
     const data = await res.json();
+    if (res.status === 409 && data.blocked) {
+      setMessageTone("error");
+      setMessage(
+        data.error ||
+          "Transferência bloqueada: vendedor com clientes em tratando há mais de 24h.",
+      );
+      if (data.canForce !== false) {
+        setPendingForceTransfer({
+          ids,
+          sellerId: targetSeller,
+          reason: String(data.error || ""),
+          staleCount: data.blocked?.staleCount,
+        });
+      }
+      return;
+    }
     if (!res.ok) {
+      setMessageTone("error");
       setMessage(data.error || "Falha na transferência");
       return;
     }
-    setMessage(`Transferidos: ${data.count}`);
+    if (!data.count) {
+      setMessageTone("error");
+      setMessage(
+        "Nenhum lead transferido — selecione contatos da fila Transferir (ainda não atribuídos).",
+      );
+      return;
+    }
+    setPendingForceTransfer(null);
+    setMessageTone("ok");
+    setMessage(
+      data.forced
+        ? `Transferidos: ${data.count} (forçado — vendedor tinha fila >24h).`
+        : `Transferidos: ${data.count}`,
+    );
     setSelected([]);
     await refreshLeads();
   }
@@ -565,7 +619,45 @@ export function MailingPanel() {
 
       <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 md:px-8">
         {message ? (
-          <div className="mailing-panel px-4 py-3 text-sm text-emerald-200">{message}</div>
+          <div
+            className={`mailing-panel space-y-2 px-4 py-3 text-sm ${
+              messageTone === "error" ? "text-red-200" : "text-emerald-200"
+            }`}
+          >
+            <p>{message}</p>
+            {pendingForceTransfer ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-red-100/80">
+                  {pendingForceTransfer.staleCount
+                    ? `${pendingForceTransfer.staleCount} lead(s) em tratando há +24h.`
+                    : null}{" "}
+                  Master/admin pode forçar a transferência.
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  disabled={pending}
+                  onClick={() =>
+                    void transfer(pendingForceTransfer.ids, {
+                      force: true,
+                      sellerId: pendingForceTransfer.sellerId,
+                    })
+                  }
+                >
+                  Transferir mesmo assim
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPendingForceTransfer(null)}
+                >
+                  Cancelar
+                </Button>
+              </div>
+            ) : null}
+          </div>
         ) : null}
 
         {isManager ? (
@@ -831,6 +923,13 @@ export function MailingPanel() {
         {isManager && !viewSellerId ? (
           <section className="mailing-panel space-y-4 p-5">
             <h2 className="mailing-title text-lg">Distribuir mailing</h2>
+            {(counts?.staleTreating || 0) > 0 ? (
+              <p className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                {counts?.staleTreating} lead(s) em “tratando” há mais de 24h. Vendedores com
+                fila travada não recebem transferência até movimentar (ou use{" "}
+                <strong>Transferir mesmo assim</strong> após o bloqueio).
+              </p>
+            ) : null}
             <div className="flex flex-wrap items-end gap-3">
               <div className="min-w-[220px] flex-1 space-y-2">
                 <Label>Vendedor</Label>
@@ -842,6 +941,9 @@ export function MailingPanel() {
                   {sellers.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name} ({s.username})
+                      {s.transferBlocked
+                        ? ` — BLOQUEADO (${s.staleTreating || 0} +24h)`
+                        : ""}
                     </option>
                   ))}
                 </select>
@@ -864,20 +966,21 @@ export function MailingPanel() {
               </Button>
               <Button
                 disabled={!selected.length || !sellerId}
-                onClick={() => transfer(selected)}
+                onClick={() => void transfer(selected)}
               >
                 Transferir selecionados ({selected.length})
               </Button>
               <Button
                 variant="secondary"
                 disabled={!leads.length || !sellerId || queue !== "transferir"}
-                onClick={() => transfer(leads.map((l) => l.id))}
+                onClick={() => void transfer(leads.map((l) => l.id))}
               >
                 Transferir todos da fila
               </Button>
             </div>
             <p className="text-xs text-white/50">
               Na fila Transferir: use 10/20 aleatórios, escolha o vendedor e transfira de uma vez.
+              Se o nome aparecer como BLOQUEADO, o vendedor tem clientes em tratando há +24h.
             </p>
           </section>
         ) : null}
