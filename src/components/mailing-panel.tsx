@@ -153,11 +153,20 @@ export function MailingPanel() {
       return;
     }
     setViewSellerId(seller.id);
-    setSellerId(seller.id);
+    // Destino da transferência = outro vendedor (não o que estamos inspecionando)
+    const other =
+      sellers.find((s) => s.id !== seller.id) ||
+      users.find(
+        (u) =>
+          String(u.role) === "vendedor" &&
+          String(u.id) !== seller.id &&
+          u.active !== false,
+      );
+    if (other) setSellerId(String(other.id));
     setQueue("tratando");
     setSelected([]);
     setMessage(
-      `Fila de ${seller.name} — cards mostram só os leads deste vendedor. Clique em «Ver todos» para voltar.`,
+      `Fila de ${seller.name} — veja as filas dele e transfira leads (um ou vários) para outro vendedor. «Ver todos» volta.`,
     );
     void refreshLeads("tratando", search, seller.id);
   }
@@ -343,12 +352,18 @@ export function MailingPanel() {
 
   async function transfer(
     ids: string[],
-    opts?: { force?: boolean; sellerId?: string },
+    opts?: { force?: boolean; sellerId?: string; reassign?: boolean },
   ) {
     setMessage("");
     setMessageTone("ok");
     if (!opts?.force) setPendingForceTransfer(null);
     const targetSeller = opts?.sellerId || sellerId;
+    const reassign = Boolean(opts?.reassign ?? viewSellerId);
+    if (viewSellerId && targetSeller === viewSellerId) {
+      setMessageTone("error");
+      setMessage("Escolha outro vendedor de destino — não dá para transferir para o mesmo.");
+      return;
+    }
     const res = await fetch("/api/mailing/transfer", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -356,6 +371,7 @@ export function MailingPanel() {
         leadIds: ids,
         sellerId: targetSeller,
         force: Boolean(opts?.force),
+        reassign,
       }),
     });
     const data = await res.json();
@@ -383,19 +399,21 @@ export function MailingPanel() {
     if (!data.count) {
       setMessageTone("error");
       setMessage(
-        "Nenhum lead transferido — selecione contatos da fila Transferir (ainda não atribuídos).",
+        reassign
+          ? "Nenhum lead transferido — marque leads deste vendedor e escolha outro destino."
+          : "Nenhum lead transferido — selecione contatos da fila Transferir (ainda não atribuídos).",
       );
       return;
     }
     setPendingForceTransfer(null);
     setMessageTone("ok");
-    setMessage(
-      data.forced
-        ? `Transferidos: ${data.count} (forçado — vendedor tinha fila >24h).`
-        : `Transferidos: ${data.count}`,
-    );
+    const bits = [`Transferidos: ${data.count}`];
+    if (data.reassigned) bits.push(`${data.reassigned} reatribuído(s)`);
+    if (data.assigned) bits.push(`${data.assigned} da pool`);
+    if (data.forced) bits.push("forçado — destino tinha fila >24h");
+    setMessage(bits.join(" · "));
     setSelected([]);
-    await refreshLeads();
+    await refreshLeads(queue, search, viewSellerId);
   }
 
   async function moveQueue(leadId: string, next: Lead["queue"]) {
@@ -648,6 +666,7 @@ export function MailingPanel() {
                   onClick={() =>
                     void transfer(pendingForceTransfer.ids, {
                       force: true,
+                      reassign: Boolean(viewSellerId),
                       sellerId: pendingForceTransfer.sellerId,
                     })
                   }
@@ -934,9 +953,13 @@ export function MailingPanel() {
           ))}
         </section>
 
-        {isManager && !viewSellerId ? (
+        {isManager ? (
           <section className="mailing-panel space-y-4 p-5">
-            <h2 className="mailing-title text-lg">Distribuir mailing</h2>
+            <h2 className="mailing-title text-lg">
+              {viewSellerId
+                ? "Transferir desta fila para outro vendedor"
+                : "Distribuir mailing"}
+            </h2>
             {(counts?.staleTreating || 0) > 0 ? (
               <p className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
                 {counts?.staleTreating} lead(s) em “tratando” há mais de 24h. Vendedores com
@@ -946,55 +969,72 @@ export function MailingPanel() {
             ) : null}
             <div className="flex flex-wrap items-end gap-3">
               <div className="min-w-[220px] flex-1 space-y-2">
-                <Label>Vendedor</Label>
+                <Label>{viewSellerId ? "Transferir para" : "Vendedor"}</Label>
                 <select
                   className="mailing-select"
                   value={sellerId}
                   onChange={(e) => setSellerId(e.target.value)}
                 >
-                  {sellers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.username})
-                      {s.transferBlocked
-                        ? ` — BLOQUEADO (${s.staleTreating || 0} +24h)`
-                        : ""}
-                    </option>
-                  ))}
+                  {sellers
+                    .filter((s) => !viewSellerId || s.id !== viewSellerId)
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.username})
+                        {s.transferBlocked
+                          ? ` — BLOQUEADO (${s.staleTreating || 0} +24h)`
+                          : ""}
+                      </option>
+                    ))}
                 </select>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={!leads.length || queue !== "transferir"}
-                onClick={() => selectRandom(10)}
-              >
-                Selecionar 10 aleatórios
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={!leads.length || queue !== "transferir"}
-                onClick={() => selectRandom(20)}
-              >
-                Selecionar 20 aleatórios
-              </Button>
+              {!viewSellerId ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!leads.length || queue !== "transferir"}
+                    onClick={() => selectRandom(10)}
+                  >
+                    Selecionar 10 aleatórios
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!leads.length || queue !== "transferir"}
+                    onClick={() => selectRandom(20)}
+                  >
+                    Selecionar 20 aleatórios
+                  </Button>
+                </>
+              ) : null}
               <Button
                 disabled={!selected.length || !sellerId}
-                onClick={() => void transfer(selected)}
+                onClick={() => void transfer(selected, { reassign: Boolean(viewSellerId) })}
               >
                 Transferir selecionados ({selected.length})
               </Button>
               <Button
                 variant="secondary"
-                disabled={!leads.length || !sellerId || queue !== "transferir"}
-                onClick={() => void transfer(leads.map((l) => l.id))}
+                disabled={
+                  !leads.length ||
+                  !sellerId ||
+                  (!viewSellerId && queue !== "transferir")
+                }
+                onClick={() =>
+                  void transfer(leads.map((l) => l.id), {
+                    reassign: Boolean(viewSellerId),
+                  })
+                }
               >
-                Transferir todos da fila
+                {viewSellerId
+                  ? `Transferir todos desta fila (${leads.length})`
+                  : "Transferir todos da fila"}
               </Button>
             </div>
             <p className="text-xs text-white/50">
-              Na fila Transferir: use 10/20 aleatórios, escolha o vendedor e transfira de uma vez.
-              Se o nome aparecer como BLOQUEADO, o vendedor tem clientes em tratando há +24h.
+              {viewSellerId
+                ? "Marque um lead (individual) ou use Transferir todos desta fila (em massa) para outro vendedor. Vale para tratando, sem resposta, etc."
+                : "Na fila Transferir: use 10/20 aleatórios, escolha o vendedor e transfira de uma vez. Se o nome aparecer como BLOQUEADO, o vendedor tem clientes em tratando há +24h."}
             </p>
           </section>
         ) : null}
@@ -1081,7 +1121,7 @@ export function MailingPanel() {
               ) : null}
               <span className="text-xs text-white/50">
                 {viewSellerId
-                  ? "Visualizando só a fila deste vendedor."
+                  ? "Marque leads e use Transferir selecionados / todos acima para passar a outro vendedor."
                   : "Marque manualmente ou use selecionar todos para remover clientes que não quer mais."}
               </span>
             </div>
@@ -1295,7 +1335,7 @@ export function MailingPanel() {
               </form>
               <p className="text-xs text-white/55">
                 Clique no <strong className="text-sky-200">nome do vendedor</strong> para ver
-                a fila dele (tratando, sem resposta, etc.).
+                as filas dele e transferir leads (individual ou em massa) para outro.
               </p>
               {user.role === "master" ? (
                 <p className="text-xs text-white/55">

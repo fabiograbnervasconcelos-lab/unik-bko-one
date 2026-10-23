@@ -15,11 +15,14 @@ export async function POST(request: Request) {
     leadIds?: string[];
     sellerId?: string;
     force?: boolean;
+    reassign?: boolean;
   } | null;
 
   const leadIds = Array.isArray(body?.leadIds) ? body!.leadIds.filter(Boolean) : [];
   const sellerId = body?.sellerId?.trim() || "";
   const force = Boolean(body?.force) && canDistribute(user.role);
+  // Master/admin: reatribuir leads já de outro vendedor (fila do usuário)
+  const reassign = Boolean(body?.reassign) && canDistribute(user.role);
   if (!leadIds.length || !sellerId) {
     return NextResponse.json(
       { error: "Informe leadIds e o vendedor (sellerId)." },
@@ -33,6 +36,7 @@ export async function POST(request: Request) {
       sellerId,
       actorId: user.id,
       force,
+      reassign,
     });
     if (result.blocked) {
       return NextResponse.json(
@@ -48,7 +52,10 @@ export async function POST(request: Request) {
     return NextResponse.json({
       transferred: result.transferred,
       count: result.transferred.length,
+      assigned: result.assigned,
+      reassigned: result.reassigned,
       forced: force,
+      reassign,
     });
   } catch (error) {
     return NextResponse.json(
