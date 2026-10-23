@@ -761,6 +761,55 @@ async function closeDrawer(page: Page) {
   await humanPause(900, 1400);
 }
 
+/** Extrai CPF/CNPJ e e-mail do payload PAP (vários formatos). */
+export function extractPapClientIdentity(venda: Record<string, unknown>): {
+  cpf: string;
+  email: string;
+} {
+  const dados = (venda.dadosCliente || {}) as Record<string, unknown>;
+  const contatos = Array.isArray(dados.contatos)
+    ? (dados.contatos as Array<Record<string, unknown>>)
+    : [];
+  const outros = Array.isArray(dados.outrosContatos)
+    ? (dados.outrosContatos as Array<Record<string, unknown>>)
+    : [];
+
+  const cpfRaw =
+    dados.cpf ||
+    dados.cnpj ||
+    dados.documento ||
+    dados.cpfCnpj ||
+    venda.cpf ||
+    venda.cnpj ||
+    venda.documento ||
+    venda.documentoCliente ||
+    "";
+  const cpf = onlyDigits(String(cpfRaw));
+
+  const emailCandidates: unknown[] = [
+    dados.email,
+    dados.eMail,
+    dados.emailCliente,
+    venda.email,
+    venda.emailCliente,
+  ];
+  for (const c of [...contatos, ...outros]) {
+    if (c && typeof c === "object") {
+      emailCandidates.push(c.email, c.eMail, c.emailContato);
+    }
+  }
+  let email = "";
+  for (const candidate of emailCandidates) {
+    const v = String(candidate || "").trim();
+    if (v.includes("@")) {
+      email = v;
+      break;
+    }
+  }
+
+  return { cpf, email };
+}
+
 function mapVendaToLead(
   venda: Record<string, unknown>,
   saleType: PapSaleType,
@@ -772,11 +821,12 @@ function mapVendaToLead(
   const banda = (produtos.bandaLarga || {}) as Record<string, unknown>;
   const vendedor = (venda.vendedor || {}) as Record<string, unknown>;
   const { parts: endParts, full: enderecoCompleto } = extractPapAddress(venda);
+  const identity = extractPapClientIdentity(venda);
 
   const part1: LeadPartData = {
     nome: String(dados.nome || venda.cliente || ""),
-    cpf: String(dados.cpf || venda.cpf || ""),
-    email: String(dados.email || ""),
+    cpf: identity.cpf,
+    email: identity.email,
     telefone: phoneRaw,
     dataNascimento: String(dados.dataNascimento || ""),
     nomeMae: String(dados.nomeMae || ""),
@@ -839,8 +889,8 @@ function mapVendaToLead(
     queue: "transferir",
     name: part1.nome || "Cliente PAP",
     phone: onlyPhone(phoneRaw) || phoneRaw,
-    document: onlyDigits(String(part1.cpf)) || undefined,
-    email: part1.email || undefined,
+    document: identity.cpf || undefined,
+    email: identity.email || undefined,
     // address = logradouro (rua); cidade/bairro/número ficam em part2 + city
     address: part2.endereco || enderecoCompleto || undefined,
     city: part2.cidade || undefined,
@@ -1558,22 +1608,29 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
     await loginPap(page, creds.email, creds.password);
     await captureLiveShot(page, "historico");
 
-    // Janelas de data: começa no período pedido; se total > ~480 ou 401,
-    // reloga e continua do último dia importado (evita bloqueio do PAP).
-    let windows: DateWindow[] = [
-      { from, to, fromBr: options.dateFrom, toBr: options.dateTo },
-    ];
+    // Sempre dia a dia quando o período tem mais de 1 dia (mais rápido e evita
+    // o teto ~500 do PAP). Ex.: 01/09→30/09 vira 01/09–01/09, depois 02/09–02/09…
+    const multiDay = compareBrDate(options.dateFrom, options.dateTo) !== 0;
+    let windows: DateWindow[] = multiDay
+      ? splitDateRangeDaily(from, to)
+      : [{ from, to, fromBr: options.dateFrom, toBr: options.dateTo }];
     let windowIndex = 0;
-    let splitDone = false;
+    let splitDone = multiDay;
     let resumePasses = 0;
     const maxPages = options.maxPages ?? 5000;
-    const MAX_RESUME = 20;
+    const MAX_RESUME = 40;
+
+    if (multiDay) {
+      scrapeLog(
+        `Modo dia a dia: ${windows.length} dia(s) de ${options.dateFrom} até ${options.dateTo}. Cada dia grava e avança.`,
+      );
+    }
 
     while (windowIndex < windows.length) {
       assertNotCancelled();
       const win = windows[windowIndex]!;
       scrapeLog(
-        `Janela ${windowIndex + 1}/${windows.length}: ${win.fromBr} → ${win.toBr}`,
+        `Dia ${windowIndex + 1}/${windows.length}: filtro ${win.fromBr} → ${win.toBr}`,
       );
 
       await applyHistoricoFilters(page, pageBuckets, vendasCursor, {
@@ -1593,7 +1650,7 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         );
       }
 
-      // Primeira consulta grande demais → divide em dias e recomeça
+      // Consulta de 1 dia ainda enorme → mantém proteção (raro); período multi já veio partido
       if (
         !splitDone &&
         windows.length === 1 &&
@@ -1718,7 +1775,8 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
             } else if (result.created) {
               collected.push(result.lead);
               scrapeLog(
-                `Importado: ${result.lead.name} · ${result.lead.part1?.numeroPedido || ""} · ${result.lead.phone}`,
+                `Importado: ${result.lead.name} · ${result.lead.part1?.numeroPedido || ""} · ${result.lead.phone}` +
+                  ` · CPF ${result.lead.document || "—"} · e-mail ${result.lead.email || "—"}`,
                 {
                   imported: loadScrapeProgress().imported + 1,
                   processed: loadScrapeProgress().processed + 1,
@@ -1874,11 +1932,14 @@ export async function runPapHistoricoScrape(options: PapScrapeOptions) {
         continue;
       }
 
+      scrapeLog(
+        `Dia ${win.fromBr} gravado · avançando para o próximo… · importados até agora: ${loadScrapeProgress().imported}`,
+      );
       windowIndex += 1;
     }
 
     scrapeLog(
-      `Concluído: ${loadScrapeProgress().imported} importados, ${loadScrapeProgress().skipped} já existiam/pulados.`,
+      `Concluído: ${loadScrapeProgress().imported} importados, ${loadScrapeProgress().skipped} já existiam/pulados · período ${options.dateFrom} → ${options.dateTo}.`,
       {
         state: "done",
         finishedAt: new Date().toISOString(),

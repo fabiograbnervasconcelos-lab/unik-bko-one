@@ -716,6 +716,12 @@ export function MailingPanel() {
                   placeholder="16/10/2026"
                 />
               </div>
+              <p className="text-xs text-white/50 md:col-span-2">
+                Períodos com vários dias rodam <strong className="text-white/75">dia a dia</strong>{" "}
+                (ex.: 01/09→01/09, grava, 02/09→02/09…) — mais rápido e evita o limite ~500 do PAP.
+                Cada lead importa <strong className="text-white/75">CPF</strong> e{" "}
+                <strong className="text-white/75">e-mail</strong>.
+              </p>
               <div className="space-y-2">
                 <Label htmlFor="papEmail">Login PAP (opcional)</Label>
                 <Input
@@ -1101,6 +1107,8 @@ export function MailingPanel() {
                   <th>Pedido</th>
                   <th>Nome</th>
                   <th>Telefone</th>
+                  <th>CPF</th>
+                  <th>E-mail</th>
                   <th>Endereço</th>
                   <th>Nº</th>
                   <th>Bairro</th>
@@ -1143,6 +1151,12 @@ export function MailingPanel() {
                       <div className="font-medium text-white">{lead.name}</div>
                     </td>
                     <td>{lead.phone}</td>
+                    <td className="whitespace-nowrap font-mono text-xs text-white/85">
+                      {lead.document || lead.part1?.cpf || "—"}
+                    </td>
+                    <td className="max-w-[180px] text-xs text-sky-100/90 break-all">
+                      {lead.email || lead.part1?.email || "—"}
+                    </td>
                     <td className="max-w-[200px] text-xs text-white/85">{rua}</td>
                     <td className="whitespace-nowrap text-xs text-white/85">
                       {numero}
@@ -1232,7 +1246,7 @@ export function MailingPanel() {
                 {!leads.length ? (
                   <tr>
                     <td
-                      colSpan={isManager ? 12 : 11}
+                      colSpan={isManager ? 14 : 13}
                       className="py-8 text-center text-white/50"
                     >
                       Nenhum lead nesta fila.
@@ -1617,6 +1631,8 @@ export function MailingPanel() {
                   <th>Pedido</th>
                   <th>Nome</th>
                   <th>Telefone</th>
+                  <th>CPF</th>
+                  <th>E-mail</th>
                   <th>Endereço</th>
                   <th>Nº</th>
                   <th>Bairro</th>
@@ -1659,6 +1675,12 @@ export function MailingPanel() {
                       <div className="font-medium text-white">{lead.name}</div>
                     </td>
                     <td>{lead.phone}</td>
+                    <td className="whitespace-nowrap font-mono text-xs text-white/85">
+                      {lead.document || lead.part1?.cpf || "—"}
+                    </td>
+                    <td className="max-w-[180px] text-xs text-sky-100/90 break-all">
+                      {lead.email || lead.part1?.email || "—"}
+                    </td>
                     <td className="max-w-[200px] text-xs text-white/85">{rua}</td>
                     <td className="whitespace-nowrap text-xs text-white/85">
                       {numero}
@@ -1748,7 +1770,7 @@ export function MailingPanel() {
                 {!leads.length ? (
                   <tr>
                     <td
-                      colSpan={isManager ? 12 : 11}
+                      colSpan={isManager ? 14 : 13}
                       className="py-8 text-center text-white/50"
                     >
                       Nenhum lead nesta fila.
