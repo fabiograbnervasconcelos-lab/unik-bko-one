@@ -38,11 +38,18 @@ export async function transferLeads(params: {
   actorId: string;
   /** Master/admin: ignora bloqueio de “tratando” > 24h. */
   force?: boolean;
-}): Promise<{ transferred: MailingLead[]; blocked?: TransferBlockInfo }> {
+  /**
+   * Master/admin: também reatribui leads já de outro vendedor
+   * (fila tratando / fechadas), não só a pool Transferir.
+   */
+  reassign?: boolean;
+}): Promise<{
+  transferred: MailingLead[];
+  blocked?: TransferBlockInfo;
+  reassigned: number;
+  assigned: number;
+}> {
   const seller = loadUsers().find((user) => user.id === params.sellerId && user.active);
-  if (!seller || seller.role === "master") {
-    // master can receive too if role is vendedor/admin; block only missing/inactive
-  }
   if (!seller || !seller.active) {
     throw new Error("Vendedor inválido ou inativo.");
   }
@@ -52,32 +59,60 @@ export async function transferLeads(params: {
 
   const block = sellerTransferBlock(seller.id);
   if (block.blocked && !params.force) {
-    return { transferred: [], blocked: block };
+    return { transferred: [], blocked: block, reassigned: 0, assigned: 0 };
   }
 
   const nowIso = new Date().toISOString();
   const idSet = new Set(params.leadIds);
   const transferred: MailingLead[] = [];
+  let assigned = 0;
+  let reassigned = 0;
+  const allowReassign = Boolean(params.reassign);
 
   await updateLeads((leads) =>
     leads.map((lead) => {
       if (!idSet.has(lead.id)) return lead;
-      if (lead.queue !== "transferir") return lead;
-      const next: MailingLead = {
-        ...lead,
-        queue: "tratando",
-        assignedTo: seller.id,
-        assignedAt: nowIso,
-        treatingSince: nowIso,
-        closedAt: null,
-        updatedAt: nowIso,
-      };
-      transferred.push(next);
-      return next;
+
+      // Pool Transferir → atribui ao vendedor e abre em tratando
+      if (lead.queue === "transferir") {
+        const next: MailingLead = {
+          ...lead,
+          queue: "tratando",
+          assignedTo: seller.id,
+          assignedAt: nowIso,
+          treatingSince: nowIso,
+          closedAt: null,
+          updatedAt: nowIso,
+        };
+        transferred.push(next);
+        assigned += 1;
+        return next;
+      }
+
+      // Já de outro vendedor → master/admin pode reatribuir (mantém a fila atual)
+      if (
+        allowReassign &&
+        lead.assignedTo &&
+        lead.assignedTo !== seller.id
+      ) {
+        const next: MailingLead = {
+          ...lead,
+          assignedTo: seller.id,
+          assignedAt: nowIso,
+          treatingSince:
+            lead.queue === "tratando" ? nowIso : lead.treatingSince,
+          updatedAt: nowIso,
+        };
+        transferred.push(next);
+        reassigned += 1;
+        return next;
+      }
+
+      return lead;
     }),
   );
 
-  return { transferred };
+  return { transferred, reassigned, assigned };
 }
 
 export async function moveLeadQueue(params: {
