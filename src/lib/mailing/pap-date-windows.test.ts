@@ -31,4 +31,15 @@ describe("pap-date-windows", () => {
     assert.equal(wins[2]!.toBr, "21/08/2026");
     assert.ok(compareBrDate("19/08/2026", "21/08/2026") < 0);
   });
+
+  it("splitDateRangeDaily 01/09→30/09 tem 30 dias iguais De=Até", () => {
+    const from = parseBrDate("01/09/2026")!;
+    const to = parseBrDate("30/09/2026")!;
+    const wins = splitDateRangeDaily(from, to);
+    assert.equal(wins.length, 30);
+    assert.equal(wins[0]!.fromBr, "01/09/2026");
+    assert.equal(wins[0]!.toBr, "01/09/2026");
+    assert.equal(wins[29]!.fromBr, "30/09/2026");
+    assert.equal(wins[29]!.toBr, "30/09/2026");
+  });
 });
