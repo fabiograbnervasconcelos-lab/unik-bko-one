@@ -15,7 +15,8 @@ function reopenToTratando(lead: {
   const reopening =
     lead.queue === "sem_interesse" ||
     lead.queue === "sem_resposta" ||
-    lead.queue === "vendido";
+    lead.queue === "vendido" ||
+    lead.queue === "ja_contratou_nio";
   return {
     queue: "tratando" as const,
     closedAt: null,
@@ -36,5 +37,17 @@ describe("voltar a tratando", () => {
     assert.equal(next.closedAt, null);
     assert.equal(next.treatingSince, "2026-10-20T12:00:00.000Z");
     assert.equal(next.assignedTo, "seller-1");
+  });
+
+  it("reabre ja_contratou_nio limpando closedAt", () => {
+    const next = reopenToTratando({
+      queue: "ja_contratou_nio",
+      closedAt: "2026-10-19T10:00:00.000Z",
+      treatingSince: "2026-10-18T10:00:00.000Z",
+      assignedTo: "seller-1",
+    });
+    assert.equal(next.queue, "tratando");
+    assert.equal(next.closedAt, null);
+    assert.equal(next.treatingSince, "2026-10-20T12:00:00.000Z");
   });
 });

@@ -25,7 +25,13 @@ type Lead = {
   city?: string;
   state?: string;
   zip?: string;
-  queue: "transferir" | "tratando" | "sem_interesse" | "sem_resposta" | "vendido";
+  queue:
+    | "transferir"
+    | "tratando"
+    | "sem_interesse"
+    | "sem_resposta"
+    | "vendido"
+    | "ja_contratou_nio";
   source: string;
   saleType?: string;
   papId?: string;
@@ -43,6 +49,7 @@ type Counts = {
   sem_interesse: number;
   sem_resposta: number;
   vendido: number;
+  ja_contratou_nio: number;
   staleTreating: number;
   total: number;
 };
@@ -892,7 +899,7 @@ export function MailingPanel() {
           </div>
         )}
 
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           {(
             [
               ["transferir", "Transferir"],
@@ -900,6 +907,7 @@ export function MailingPanel() {
               ["sem_interesse", "Sem interesse"],
               ["sem_resposta", "Sem resposta"],
               ["vendido", "Vendido"],
+              ["ja_contratou_nio", "Já contratou NIO"],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -1174,6 +1182,14 @@ export function MailingPanel() {
                               >
                                 Vendido
                               </Button>
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => moveQueue(lead.id, "ja_contratou_nio")}
+                                title="Já contratou com a NIO"
+                              >
+                                Já contratou NIO
+                              </Button>
                             </>
                           ) : null}
                           {lead.queue === "transferir" && user.role === "vendedor" ? (
@@ -1186,7 +1202,8 @@ export function MailingPanel() {
                           ) : null}
                           {(lead.queue === "sem_interesse" ||
                             lead.queue === "sem_resposta" ||
-                            lead.queue === "vendido") &&
+                            lead.queue === "vendido" ||
+                            lead.queue === "ja_contratou_nio") &&
                           (user.role === "vendedor" || isManager) ? (
                             <Button
                               size="xs"
@@ -1426,7 +1443,7 @@ export function MailingPanel() {
           </div>
         ) : (
           <>
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           {(
             [
               ["transferir", "Transferir"],
@@ -1434,6 +1451,7 @@ export function MailingPanel() {
               ["sem_interesse", "Sem interesse"],
               ["sem_resposta", "Sem resposta"],
               ["vendido", "Vendido"],
+              ["ja_contratou_nio", "Já contratou NIO"],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -1680,6 +1698,14 @@ export function MailingPanel() {
                               >
                                 Vendido
                               </Button>
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => moveQueue(lead.id, "ja_contratou_nio")}
+                                title="Já contratou com a NIO"
+                              >
+                                Já contratou NIO
+                              </Button>
                             </>
                           ) : null}
                           {lead.queue === "transferir" && user.role === "vendedor" ? (
@@ -1692,7 +1718,8 @@ export function MailingPanel() {
                           ) : null}
                           {(lead.queue === "sem_interesse" ||
                             lead.queue === "sem_resposta" ||
-                            lead.queue === "vendido") &&
+                            lead.queue === "vendido" ||
+                            lead.queue === "ja_contratou_nio") &&
                           (user.role === "vendedor" || isManager) ? (
                             <Button
                               size="xs"
