@@ -92,10 +92,18 @@ export async function moveLeadQueue(params: {
     "sem_interesse",
     "sem_resposta",
     "vendido",
+    "ja_contratou_nio",
   ];
   if (!allowed.includes(params.queue)) {
     throw new Error("Fila inválida.");
   }
+
+  const closedQueues: QueueStatus[] = [
+    "sem_interesse",
+    "sem_resposta",
+    "vendido",
+    "ja_contratou_nio",
+  ];
 
   let updated: MailingLead | null = null;
   const nowIso = new Date().toISOString();
@@ -110,7 +118,7 @@ export async function moveLeadQueue(params: {
         throw new Error("Sem permissão para mover este lead.");
       }
 
-      // Vendedor só move entre tratando / sem_interesse / sem_resposta / vendido
+      // Vendedor só move entre tratando / filas fechadas (não devolve para transferir)
       if (!isManager) {
         if (params.queue === "transferir") {
           throw new Error("Vendedor não pode devolver para a fila transferir.");
@@ -120,10 +128,7 @@ export async function moveLeadQueue(params: {
 
       const reopeningToTratando =
         params.queue === "tratando" &&
-        (lead.queue === "sem_interesse" ||
-          lead.queue === "sem_resposta" ||
-          lead.queue === "vendido" ||
-          lead.queue === "transferir");
+        (closedQueues.includes(lead.queue) || lead.queue === "transferir");
 
       const next: MailingLead = {
         ...lead,
@@ -135,14 +140,11 @@ export async function moveLeadQueue(params: {
               ? nowIso
               : lead.treatingSince || nowIso
             : lead.treatingSince,
-        closedAt:
-          params.queue === "sem_interesse" ||
-          params.queue === "sem_resposta" ||
-          params.queue === "vendido"
-            ? nowIso
-            : params.queue === "tratando" || params.queue === "transferir"
-              ? null
-              : lead.closedAt,
+        closedAt: closedQueues.includes(params.queue)
+          ? nowIso
+          : params.queue === "tratando" || params.queue === "transferir"
+            ? null
+            : lead.closedAt,
         assignedTo:
           params.queue === "transferir"
             ? null
@@ -185,6 +187,7 @@ export function queueCounts(leads: MailingLead[], sellerId?: string | null) {
     sem_interesse: scoped.filter((l) => l.queue === "sem_interesse").length,
     sem_resposta: scoped.filter((l) => l.queue === "sem_resposta").length,
     vendido: scoped.filter((l) => l.queue === "vendido").length,
+    ja_contratou_nio: scoped.filter((l) => l.queue === "ja_contratou_nio").length,
     staleTreating: scoped.filter((l) => isStaleTreating(l)).length,
     total: scoped.length,
   };
@@ -205,7 +208,8 @@ export function filterLeads(params: {
         (lead.queue === "tratando" ||
           lead.queue === "sem_interesse" ||
           lead.queue === "sem_resposta" ||
-          lead.queue === "vendido"),
+          lead.queue === "vendido" ||
+          lead.queue === "ja_contratou_nio"),
     );
   }
   if (params.queue && params.queue !== "all") {
