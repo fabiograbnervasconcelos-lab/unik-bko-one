@@ -531,6 +531,93 @@ async function selectStatusPrimario(page: Page, label: string) {
   }
 }
 
+const UF_TARGET_LABEL = "SC - Santa Catarina";
+const UF_SC_RE = /Santa Catarina|SC\s*[-–]/i;
+
+/** True se o drawer já tem UF = Santa Catarina. */
+async function drawerHasSantaCatarinaUf(page: Page): Promise<boolean> {
+  const drawer = page.locator(".MuiDrawer-paper");
+  if (!(await drawer.isVisible().catch(() => false))) return false;
+  const values = drawer.locator(
+    "div[class*='-singleValue'], div[class*='-multiValue']",
+  );
+  const n = await values.count();
+  for (let i = 0; i < n; i++) {
+    const text = ((await values.nth(i).innerText().catch(() => "")) || "").trim();
+    if (UF_SC_RE.test(text)) return true;
+  }
+  const body = ((await drawer.innerText().catch(() => "")) || "").replace(/\s+/g, " ");
+  return /\bUF\b[\s\S]{0,80}Santa Catarina|\bUF\b[\s\S]{0,40}\bSC\s*[-–]/i.test(
+    body,
+  );
+}
+
+/**
+ * UF é obrigatório no PAP: garantir SC - Santa Catarina.
+ * Se já estiver SC, mantém; senão abre o select e escolhe.
+ */
+async function ensureUfSantaCatarina(page: Page) {
+  await ensureFiltersOpen(page);
+
+  if (await drawerHasSantaCatarinaUf(page)) {
+    scrapeLog(`UF já está em ${UF_TARGET_LABEL}.`);
+    return;
+  }
+
+  scrapeLog(`Selecionando UF = ${UF_TARGET_LABEL} (obrigatório)…`);
+  const drawer = page.locator(".MuiDrawer-paper");
+
+  // Prefer control próximo do label "UF"
+  let ufControl = drawer
+    .locator("div")
+    .filter({ has: page.locator("text=/^UF$/i") })
+    .locator("div[class*='-control']")
+    .first();
+
+  if (!(await ufControl.count())) {
+    // Fallback: 4º react-select do drawer (0=Tipo, 1=Status, 2=Status Sec., 3=UF)
+    const controls = drawer.locator("div[class*='-control']");
+    const count = await controls.count();
+    if (count >= 4) {
+      ufControl = controls.nth(3);
+    } else if (count > 0) {
+      ufControl = controls.last();
+    }
+  }
+
+  if (!(await ufControl.count())) {
+    throw new Error("Filtro UF não encontrado no drawer do PAP.");
+  }
+
+  await ufControl.scrollIntoViewIfNeeded().catch(() => undefined);
+  await ufControl.click({ force: true });
+  await humanPause(600, 1000);
+
+  const menuOpt = page
+    .locator(
+      "div[id*='react-select'][id*='option'], div[class*='-menu'] div[class*='-option'], div[class*='-option']",
+    )
+    .filter({ hasText: /SC\s*[-–]\s*Santa Catarina|Santa Catarina/i })
+    .first();
+
+  if (await menuOpt.count()) {
+    await menuOpt.click({ force: true });
+  } else {
+    await page.keyboard.type("Santa Catarina", { delay: 35 });
+    await humanPause(500, 800);
+    await page.keyboard.press("Enter");
+  }
+  await humanPause(900, 1400);
+  await ensureFiltersOpen(page);
+
+  if (!(await drawerHasSantaCatarinaUf(page))) {
+    throw new Error(
+      `Não foi possível selecionar UF = ${UF_TARGET_LABEL} (obrigatório no PAP).`,
+    );
+  }
+  scrapeLog(`UF OK: ${UF_TARGET_LABEL}.`);
+}
+
 async function readOpenCalendarMonthYear(page: Page) {
   const header = page.locator(
     ".MuiPopover-paper .MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-switchHeader p",
@@ -1424,6 +1511,11 @@ async function applyHistoricoFilters(
     await selectStatusPrimario(page, STATUS_PRIMARIO_VENDA);
     scrapeLog("Status Primário OK (Aguardando tratamento).");
   }
+
+  // UF obrigatório no PAP: SC - Santa Catarina
+  assertNotCancelled();
+  await ensureUfSantaCatarina(page);
+  await captureLiveShot(page, "uf-sc");
 
   assertNotCancelled();
   const v1 = await pickCalendarDate(page, "De", params.from);
