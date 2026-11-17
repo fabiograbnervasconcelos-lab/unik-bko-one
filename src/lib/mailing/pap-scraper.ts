@@ -531,10 +531,11 @@ async function selectStatusPrimario(page: Page, label: string) {
   }
 }
 
-const UF_SELECTED_RE = /Santa Catarina|SC\s*[-–]/i;
+const UF_TARGET_LABEL = "SC - Santa Catarina";
+const UF_SC_RE = /Santa Catarina|SC\s*[-–]/i;
 
-/** True se o drawer ainda mostra UF preenchida (ex.: SC - Santa Catarina). */
-async function drawerHasUfSelected(page: Page): Promise<boolean> {
+/** True se o drawer já tem UF = Santa Catarina. */
+async function drawerHasSantaCatarinaUf(page: Page): Promise<boolean> {
   const drawer = page.locator(".MuiDrawer-paper");
   if (!(await drawer.isVisible().catch(() => false))) return false;
   const values = drawer.locator(
@@ -543,113 +544,78 @@ async function drawerHasUfSelected(page: Page): Promise<boolean> {
   const n = await values.count();
   for (let i = 0; i < n; i++) {
     const text = ((await values.nth(i).innerText().catch(() => "")) || "").trim();
-    if (UF_SELECTED_RE.test(text) || /^[A-Z]{2}\s*[-–]/.test(text)) return true;
+    if (UF_SC_RE.test(text)) return true;
   }
-  // Fallback: bloco com label UF contendo estado
   const body = ((await drawer.innerText().catch(() => "")) || "").replace(/\s+/g, " ");
-  return /\bUF\b[\s\S]{0,80}Santa Catarina|\bUF\b[\s\S]{0,40}\bSC\s*[-–]/i.test(body);
+  return /\bUF\b[\s\S]{0,80}Santa Catarina|\bUF\b[\s\S]{0,40}\bSC\s*[-–]/i.test(
+    body,
+  );
 }
 
 /**
- * UF deve ficar em branco (sem SC/outro estado). O PAP às vezes traz UF da sessão.
- * Clica no × do react-select / limpa o valor até não restar "XX - …".
+ * UF é obrigatório no PAP: garantir SC - Santa Catarina.
+ * Se já estiver SC, mantém; senão abre o select e escolhe.
  */
-async function clearUfFilter(page: Page) {
+async function ensureUfSantaCatarina(page: Page) {
   await ensureFiltersOpen(page);
 
-  if (!(await drawerHasUfSelected(page))) {
-    scrapeLog("UF já está em branco.");
+  if (await drawerHasSantaCatarinaUf(page)) {
+    scrapeLog(`UF já está em ${UF_TARGET_LABEL}.`);
     return;
   }
 
-  scrapeLog("Limpando filtro UF (deve ficar em branco)…");
+  scrapeLog(`Selecionando UF = ${UF_TARGET_LABEL} (obrigatório)…`);
   const drawer = page.locator(".MuiDrawer-paper");
 
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    assertNotCancelled();
-    await ensureFiltersOpen(page);
-    if (!(await drawerHasUfSelected(page))) break;
+  // Prefer control próximo do label "UF"
+  let ufControl = drawer
+    .locator("div")
+    .filter({ has: page.locator("text=/^UF$/i") })
+    .locator("div[class*='-control']")
+    .first();
 
-    // 1) DOM: achar control com valor de UF e clicar clearIndicator / ×
-    const cleared = await drawer.evaluate((root) => {
-      const isUfText = (t: string) =>
-        /Santa Catarina|SC\s*[-–]/i.test(t) || /^[A-Z]{2}\s*[-–]/.test(t.trim());
-
-      const controls = Array.from(
-        root.querySelectorAll<HTMLElement>("div[class*='-control']"),
-      );
-      for (const control of controls) {
-        const valueEl =
-          control.querySelector<HTMLElement>("div[class*='-singleValue']") ||
-          control.querySelector<HTMLElement>("div[class*='-multiValue']");
-        const valueText = (valueEl?.innerText || "").trim();
-        if (!valueText || !isUfText(valueText)) continue;
-
-        const clear =
-          control.querySelector<HTMLElement>("div[class*='clearIndicator']") ||
-          control.querySelector<HTMLElement>("[aria-label*='clear' i]") ||
-          control.querySelector<HTMLElement>("[aria-label*='Clear']") ||
-          control.querySelector<HTMLElement>("div[class*='indicatorContainer']");
-        if (clear) {
-          clear.click();
-          return "clicked-clear";
-        }
-
-        // multiValue remove (× no chip)
-        const remove = control.querySelector<HTMLElement>(
-          "div[class*='multiValueRemove'], div[class*='-multiValue'] > div:last-child",
-        );
-        if (remove) {
-          remove.click();
-          return "clicked-remove";
-        }
-      }
-      return "not-found";
-    });
-    scrapeLog(`UF limpeza DOM tentativa ${attempt}/5 · ${cleared}`);
-    await humanPause(450, 750);
-    if (!(await drawerHasUfSelected(page))) break;
-
-    // 2) Playwright: control com texto UF + Backspace
-    const ufControl = drawer
-      .locator("div[class*='-control']")
-      .filter({ hasText: UF_SELECTED_RE })
-      .first();
-    if (await ufControl.count()) {
-      const clearInd = ufControl.locator("div[class*='clearIndicator']");
-      if (await clearInd.count()) {
-        await clearInd.first().click({ force: true }).catch(() => undefined);
-      } else {
-        const box = await ufControl.boundingBox();
-        if (box) {
-          // × fica à direita do control (antes da seta)
-          await page.mouse.click(box.x + box.width - 36, box.y + box.height / 2);
-        } else {
-          await ufControl.click({ force: true }).catch(() => undefined);
-          await page.keyboard.press("Backspace").catch(() => undefined);
-          await page.keyboard.press("Delete").catch(() => undefined);
-        }
-      }
-      await humanPause(350, 600);
-      // Fecha menu se abriu, sem matar o drawer
-      await page.keyboard.press("Escape").catch(() => undefined);
-      await humanPause(200, 350);
-      await ensureFiltersOpen(page);
+  if (!(await ufControl.count())) {
+    // Fallback: 4º react-select do drawer (0=Tipo, 1=Status, 2=Status Sec., 3=UF)
+    const controls = drawer.locator("div[class*='-control']");
+    const count = await controls.count();
+    if (count >= 4) {
+      ufControl = controls.nth(3);
+    } else if (count > 0) {
+      ufControl = controls.last();
     }
-
-    scrapeLog(
-      `UF após tentativa ${attempt}: ${
-        (await drawerHasUfSelected(page)) ? "ainda preenchida" : "limpa"
-      }`,
-    );
   }
 
-  if (await drawerHasUfSelected(page)) {
+  if (!(await ufControl.count())) {
+    throw new Error("Filtro UF não encontrado no drawer do PAP.");
+  }
+
+  await ufControl.scrollIntoViewIfNeeded().catch(() => undefined);
+  await ufControl.click({ force: true });
+  await humanPause(600, 1000);
+
+  const menuOpt = page
+    .locator(
+      "div[id*='react-select'][id*='option'], div[class*='-menu'] div[class*='-option'], div[class*='-option']",
+    )
+    .filter({ hasText: /SC\s*[-–]\s*Santa Catarina|Santa Catarina/i })
+    .first();
+
+  if (await menuOpt.count()) {
+    await menuOpt.click({ force: true });
+  } else {
+    await page.keyboard.type("Santa Catarina", { delay: 35 });
+    await humanPause(500, 800);
+    await page.keyboard.press("Enter");
+  }
+  await humanPause(900, 1400);
+  await ensureFiltersOpen(page);
+
+  if (!(await drawerHasSantaCatarinaUf(page))) {
     throw new Error(
-      "Não foi possível limpar o filtro UF (ainda aparece SC/Santa Catarina). Deixe UF em branco no PAP.",
+      `Não foi possível selecionar UF = ${UF_TARGET_LABEL} (obrigatório no PAP).`,
     );
   }
-  scrapeLog("UF limpa (em branco).");
+  scrapeLog(`UF OK: ${UF_TARGET_LABEL}.`);
 }
 
 async function readOpenCalendarMonthYear(page: Page) {
@@ -1546,10 +1512,10 @@ async function applyHistoricoFilters(
     scrapeLog("Status Primário OK (Aguardando tratamento).");
   }
 
-  // PAP costuma pré-preencher UF (ex.: SC - Santa Catarina) — busca deve ser nacional
+  // UF obrigatório no PAP: SC - Santa Catarina
   assertNotCancelled();
-  await clearUfFilter(page);
-  await captureLiveShot(page, "uf-limpo");
+  await ensureUfSantaCatarina(page);
+  await captureLiveShot(page, "uf-sc");
 
   assertNotCancelled();
   const v1 = await pickCalendarDate(page, "De", params.from);
