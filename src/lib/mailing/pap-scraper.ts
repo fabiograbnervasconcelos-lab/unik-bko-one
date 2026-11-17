@@ -531,6 +531,133 @@ async function selectStatusPrimario(page: Page, label: string) {
   }
 }
 
+/**
+ * UF deve ficar em branco (sem SC/outro estado). O PAP às vezes traz UF da sessão.
+ * Clica no × do react-select / limpa o valor até não restar "XX - …".
+ */
+async function clearUfFilter(page: Page) {
+  await ensureFiltersOpen(page);
+  const drawer = page.locator(".MuiDrawer-paper");
+
+  const ufValueLocator = () =>
+    drawer
+      .locator(
+        "div[class*='-singleValue'], div[class*='-multiValue']__label, div[class*='-multiValue']",
+      )
+      .filter({ hasText: /^[A-Z]{2}\s*[-–]|Santa Catarina|\bSC\b/i });
+
+  let remaining = await ufValueLocator().count();
+  if (!remaining) {
+    // Também detecta texto "SC - Santa Catarina" em qualquer singleValue do drawer
+    const anyUf = drawer.locator("div[class*='-singleValue']").filter({
+      hasText: /Santa Catarina|[A-Z]{2}\s*-\s*\w+/i,
+    });
+    remaining = await anyUf.count();
+    if (!remaining) {
+      scrapeLog("UF já está em branco.");
+      return;
+    }
+  }
+
+  scrapeLog("Limpando filtro UF (deve ficar em branco)…");
+
+  for (let attempt = 1; attempt <= 4 && remaining > 0; attempt++) {
+    assertNotCancelled();
+    await ensureFiltersOpen(page);
+
+    // 1) Botão clear do react-select (×)
+    const clearBtns = drawer.locator(
+      "div[class*='clearIndicator'], div[class*='-indicatorContainer'] svg, [aria-label*='clear' i], [aria-label*='remover' i]",
+    );
+    const clearCount = await clearBtns.count();
+    if (clearCount > 0) {
+      // Prefer clearIndicator explícito; senão tenta o que estiver no control do UF
+      const explicit = drawer.locator("div[class*='clearIndicator']");
+      if (await explicit.count()) {
+        await explicit.first().click({ force: true }).catch(() => undefined);
+      } else {
+        // Clica no × dentro do control que mostra UF
+        const ufControl = drawer
+          .locator("div[class*='-control']")
+          .filter({ hasText: /Santa Catarina|[A-Z]{2}\s*-\s*\w+/i })
+          .first();
+        if (await ufControl.count()) {
+          const ind = ufControl.locator(
+            "div[class*='indicatorContainer'], div[class*='clearIndicator']",
+          );
+          const n = await ind.count();
+          // No react-select, clear costuma ser o primeiro indicatorContainer
+          if (n > 0) {
+            await ind.first().click({ force: true }).catch(() => undefined);
+          }
+        }
+      }
+      await humanPause(400, 700);
+    }
+
+    remaining = await ufValueLocator().count();
+    if (!remaining) {
+      const still = drawer.locator("div[class*='-singleValue']").filter({
+        hasText: /Santa Catarina|[A-Z]{2}\s*-\s*\w+/i,
+      });
+      remaining = await still.count();
+    }
+    if (!remaining) break;
+
+    // 2) Fallback: Backspace / Delete no control do UF
+    const ufControl = drawer
+      .locator("div[class*='-control']")
+      .filter({ hasText: /Santa Catarina|[A-Z]{2}\s*-\s*\w+/i })
+      .first();
+    if (await ufControl.count()) {
+      await ufControl.click({ force: true }).catch(() => undefined);
+      await humanPause(200, 400);
+      await page.keyboard.press("Backspace").catch(() => undefined);
+      await page.keyboard.press("Delete").catch(() => undefined);
+      await page.keyboard.press("Escape").catch(() => undefined);
+      await humanPause(300, 500);
+      await ensureFiltersOpen(page);
+    }
+
+    remaining = await drawer
+      .locator("div[class*='-singleValue']")
+      .filter({ hasText: /Santa Catarina|[A-Z]{2}\s*-\s*\w+/i })
+      .count();
+    scrapeLog(`UF limpeza tentativa ${attempt}/4 · restante=${remaining}`);
+  }
+
+  const left = await drawer
+    .locator("div[class*='-singleValue']")
+    .filter({ hasText: /Santa Catarina|[A-Z]{2}\s*-\s*\w+/i })
+    .count();
+  if (left > 0) {
+    scrapeLog("AVISO: UF ainda preenchida após limpeza — tentando uma última vez no ×.");
+    const ufControl = drawer
+      .locator("div[class*='-control']")
+      .filter({ hasText: /Santa Catarina|[A-Z]{2}\s*-\s*\w+/i })
+      .first();
+    if (await ufControl.count()) {
+      // Clica no canto direito (onde fica o ×)
+      const box = await ufControl.boundingBox();
+      if (box) {
+        await page.mouse.click(box.x + box.width - 28, box.y + box.height / 2);
+        await humanPause(400, 700);
+      }
+    }
+  }
+
+  const finalLeft = await drawer
+    .locator("div[class*='-singleValue']")
+    .filter({ hasText: /Santa Catarina|[A-Z]{2}\s*-\s*\w+/i })
+    .count();
+  if (finalLeft > 0) {
+    throw new Error(
+      "Não foi possível limpar o filtro UF (ainda aparece estado selecionado). Deixe UF em branco no PAP.",
+    );
+  }
+  scrapeLog("UF limpa (em branco).");
+}
+
 async function readOpenCalendarMonthYear(page: Page) {
   const header = page.locator(
     ".MuiPopover-paper .MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-transitionContainer p, .MuiPickersCalendarHeader-switchHeader p",
@@ -1424,6 +1551,11 @@ async function applyHistoricoFilters(
     await selectStatusPrimario(page, STATUS_PRIMARIO_VENDA);
     scrapeLog("Status Primário OK (Aguardando tratamento).");
   }
+
+  // PAP costuma pré-preencher UF (ex.: SC - Santa Catarina) — busca deve ser nacional
+  assertNotCancelled();
+  await clearUfFilter(page);
+  await captureLiveShot(page, "uf-limpo");
 
   assertNotCancelled();
   const v1 = await pickCalendarDate(page, "De", params.from);
